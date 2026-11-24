@@ -8,10 +8,6 @@ import com.example.domain.model.MaterialFinish
 import com.example.domain.model.RoomLayoutShape
 import com.example.domain.model.RoomStructure
 import com.example.domain.repository.KitchenProject
-import com.google.firebase.Firebase
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.Schema
-import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -103,78 +99,22 @@ sealed interface AiDesignUiState {
 }
 
 /**
- * Service that uses Firebase AI Logic (`Firebase.ai.generativeModel("gemini-3.8-flash")`)
- * with structured JSON output (`Schema.obj`) to generate complete 3D kitchen layouts
- * tailored to the user's room dimensions and style preferences.
+ * v1.7 — Service that generates complete 3D kitchen layouts with Gemini.
+ *
+ * It used to call Firebase AI Logic (`Firebase.ai.generativeModel`), which
+ * can never work in this app: the repo has no google-services.json by design
+ * (see .env.example), so no FirebaseApp ever initializes and every generation
+ * failed with "Default FirebaseApp is not initialized" — the exact red error
+ * in the user's video. It now calls the Gemini REST API directly with the
+ * user's free key from Google AI Studio (stored encrypted via
+ * [GeminiApiKeyStore]); no Firebase project, no account, no card.
+ *
+ * The prompt and the JSON parser are unchanged from the Firebase version —
+ * only the transport changed. The response is requested as raw JSON
+ * (responseMimeType application/json) and the parser tolerates markdown
+ * fences around it, via [GeminiDirectClient.extractJsonObject].
  */
 class GeminiKitchenDesignService {
-
-    private val kitchenDesignSchema by lazy {
-        val unitItemSchema = Schema.obj(
-            properties = mapOf(
-                "nameAr" to Schema.string(description = "Arabic name of the kitchen unit"),
-                "typeCode" to Schema.enumeration(
-                    values = KitchenElementType.entries.map { it.name },
-                    description = "Exact enum name from KitchenElementType"
-                ),
-                "xMm" to Schema.integer(description = "Center X position in millimeters within [300, widthMm - 300]"),
-                "yMm" to Schema.integer(description = "Bottom Y elevation in millimeters (0 for base/tall, 850 for countertop appliances, 1450 for wall cabinets, 2170 for bridge crown cabinets)"),
-                "zMm" to Schema.integer(description = "Center Z position in millimeters within [175, depthMm - 300]"),
-                "rotationYDeg" to Schema.integer(description = "Rotation around Y axis in degrees: 0 (North wall), 90 (West wall), 180 (South wall), 270 (East wall)"),
-                "widthMm" to Schema.integer(description = "Unit width in mm (e.g. 600, 800, 900, 1200)"),
-                "heightMm" to Schema.integer(description = "Unit height in mm (e.g. 850 for base, 720 for wall, 2170 for tall)"),
-                "depthMm" to Schema.integer(description = "Unit depth in mm (e.g. 600 for base/tall, 350 for wall)"),
-                "materialName" to Schema.enumeration(
-                    values = MaterialFinish.ALL_FINISHES.map { it.id },
-                    description = "MaterialFinish id for cabinet body/front"
-                ),
-                "countertopMaterialName" to Schema.enumeration(
-                    values = listOf(
-                        MaterialFinish.CARRARA_MARBLE.id,
-                        MaterialFinish.BLACK_GRANITE.id,
-                        MaterialFinish.CALACATTA_GOLD.id
-                    ),
-                    description = "Countertop finish id for base cabinets"
-                )
-            )
-        )
-
-        Schema.obj(
-            properties = mapOf(
-                "proposalTitleAr" to Schema.string(description = "Attractive Arabic title for the proposed kitchen design"),
-                "architecturalSummaryAr" to Schema.string(description = "Detailed Arabic explanation of the spatial zoning and architectural flow"),
-                "ergonomicNotesAr" to Schema.string(description = "Arabic notes on Work Triangle (Sink, Cooktop, Refrigerator) distances and door clearance compliance"),
-                "lightingRecommendationAr" to Schema.string(description = "Arabic recommendation for natural daylight and 3000K under-cabinet LED placement"),
-                "suggestedAccessoriesAr" to Schema.array(
-                    items = Schema.string(),
-                    description = "List of 3 to 5 smart internal kitchen accessories in Arabic recommended for this layout"
-                ),
-                "floorMaterialName" to Schema.enumeration(
-                    values = listOf(
-                        MaterialFinish.MARBLE_WHITE_FLOOR.id,
-                        MaterialFinish.PARQUET_OAK_FLOOR.id,
-                        MaterialFinish.GREY_SLATE_FLOOR.id
-                    ),
-                    description = "Recommended floor material finish"
-                ),
-                "units" to Schema.array(
-                    items = unitItemSchema,
-                    description = "Complete list of 8 to 14 kitchen units (base cabinets, sink, drawers, cooktop, oven tower, refrigerator, upper wall cabinets, bridge cabinets, and island if room >= 4000mm)"
-                )
-            )
-        )
-    }
-
-    private val generativeModel by lazy {
-        val config = generationConfig {
-            responseMimeType = "application/json"
-            responseSchema = kitchenDesignSchema
-        }
-        Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
-            generationConfig = config
-        )
-    }
 
     suspend fun generateKitchenDesign(
         roomWidthMm: Float,
@@ -183,11 +123,20 @@ class GeminiKitchenDesignService {
         layoutShape: RoomLayoutShape,
         stylePreference: KitchenAiStylePreference,
         includeIsland: Boolean,
-        customNotes: String
+        customNotes: String,
+        apiKey: String
     ): AiDesignUiState {
         val safeW = roomWidthMm.coerceIn(2400f, 8000f).toInt()
         val safeD = roomDepthMm.coerceIn(2200f, 8000f).toInt()
         val safeH = roomHeightMm.coerceIn(2400f, 3600f).toInt()
+
+        // v1.7 — no key, no generation: guide the user instead of ever
+        // surfacing a raw English exception (the old Firebase error).
+        if (apiKey.isBlank()) {
+            return AiDesignUiState.Error(
+                "التوليد يحتاج مفتاح Gemini مجاني: افتح Google AI Studio من متصفح هاتفك (aistudio.google.com) ← Get API key ← أنشئ مفتاحاً والصقه في حقل المفتاح أعلى هذه النافذة، ثم اضغط توليد."
+            )
+        }
 
         val prompt = buildString {
             appendLine("أنت مهندس معماري خبير في تصميم المطابخ ثلاثية الأبعاد (CAD Kitchen Architect).")
@@ -208,25 +157,31 @@ class GeminiKitchenDesignService {
             appendLine("3. إذا كان الشكل U_SHAPE: أضف خزائن على الجدار الشرقي (East Wall) عند xMm = ${safeW - 300} و rotationYDeg = 270.")
             appendLine("4. يجب أن يتضمن التصميم مثلث عمل متكامل: حوض غسيل (BASE_SINK_UNIT أو BASE_SINK_VENTED_100)، خزانة أدراج (BASE_4_DRAWERS أو BASE_3_DRAWERS)، منطقة طهي (BASE_UNDER_OVEN + COOKTOP_INDUCTION + RANGE_HOOD_BOX)، برج فرن أو مؤونة (TALL_OVEN_TOWER أو TALL_PANTRY)، وثلاجة (REFRIGERATOR_FROST)، بالإضافة إلى خزائن علوية (WALL_GLASS_BLACK_FRAME / WALL_LIFT_AVENTOS) وإضاءة سقف (CEILING_CHANDELIER_MODERN أو CEILING_LINEAR_LED_PANEL).")
             appendLine("5. اترك مسافة أمامية كافية لا تقل عن 900 مم أمام جميع الأبواب والأدراج لضمان عدم تعارض فتح الأبواب مع معايير التركيب الهندسية.")
+            appendLine()
+            appendLine("صيغة الإخراج الإلزامية: أرجع كائن JSON واحداً فقط بهذه الحقول بالضبط — proposalTitleAr, architecturalSummaryAr, ergonomicNotesAr, lightingRecommendationAr, suggestedAccessoriesAr (مصفوفة نصوص), floorMaterialName, units (مصفوفة عناصر، كل عنصر به nameAr, typeCode, xMm, yMm, zMm, rotationYDeg, widthMm, heightMm, depthMm, materialName, countertopMaterialName) — بدون أي نص إضافي وبدون تنسيق markdown.")
         }
 
         return try {
-            val response = withTimeout(60_000L) {
-                generativeModel.generateContent(prompt)
+            val result = withTimeout(60_000L) {
+                GeminiDirectClient.generateJson(prompt, apiKey.trim())
             }
-            val jsonString = response.text
-            if (jsonString.isNullOrBlank()) {
-                return AiDesignUiState.Error("أرجع نموذج Gemini استجابة فارغة. يرجى المحاولة مرة أخرى.")
+            when (result) {
+                is GeminiDirectResult.Failure -> mapFailureToError(result)
+                is GeminiDirectResult.Success -> {
+                    if (result.jsonText.isBlank()) {
+                        AiDesignUiState.Error("أرجع نموذج Gemini استجابة فارغة. يرجى المحاولة مرة أخرى.")
+                    } else {
+                        parseStructuredKitchenResponse(
+                            jsonString = result.jsonText,
+                            roomWidthMm = safeW.toFloat(),
+                            roomDepthMm = safeD.toFloat(),
+                            roomHeightMm = safeH.toFloat(),
+                            layoutShape = layoutShape,
+                            stylePreference = stylePreference
+                        )
+                    }
+                }
             }
-
-            parseStructuredKitchenResponse(
-                jsonString = jsonString,
-                roomWidthMm = safeW.toFloat(),
-                roomDepthMm = safeD.toFloat(),
-                roomHeightMm = safeH.toFloat(),
-                layoutShape = layoutShape,
-                stylePreference = stylePreference
-            )
         } catch (e: TimeoutCancellationException) {
             Log.e(TAG, "Gemini kitchen design generation timed out", e)
             AiDesignUiState.Error("انتهت مهلة توليد التصميم عبر الذكاء الاصطناعي (60 ثانية). يرجى المحاولة مجدداً.")
@@ -234,10 +189,29 @@ class GeminiKitchenDesignService {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Gemini kitchen design generation failed", e)
-            AiDesignUiState.Error(
-                e.localizedMessage ?: "تعذر الاتصال بخدمة Gemini AI لتوليد تصميم المطبخ."
-            )
+            AiDesignUiState.Error("تعذر الاتصال بخدمة Gemini AI لتوليد تصميم المطبخ. تحقق من الإنترنت والمفتاح ثم حاول مجدداً.")
         }
+    }
+
+    /** Every failure the user can see is Arabic — never a raw English exception. */
+    private fun mapFailureToError(failure: GeminiDirectResult.Failure): AiDesignUiState.Error {
+        val message = when (failure.kind) {
+            GeminiDirectFailure.INVALID_KEY ->
+                "المفتاح غير صحيح أو غير مفعّل. تأكد من نسخه كاملاً من Google AI Studio (aistudio.google.com) والصقه مجدداً."
+            GeminiDirectFailure.QUOTA_EXCEEDED ->
+                "انتهت حصة المفتاح المجاني لهذه الدقيقة/اليوم. انتظر قليلاً ثم حاول مجدداً."
+            GeminiDirectFailure.MODEL_UNAVAILABLE ->
+                "نماذج Gemini المجانية غير متاحة حالياً. حاول مجدداً بعد قليل."
+            GeminiDirectFailure.NETWORK ->
+                "تعذّر الاتصال بالإنترنت. تحقق من الاتصال ثم حاول مجدداً."
+            GeminiDirectFailure.TIMEOUT ->
+                "انتهت مهلة توليد التصميم عبر الذكاء الاصطناعي (60 ثانية). يرجى المحاولة مجدداً."
+            GeminiDirectFailure.EMPTY_RESPONSE ->
+                "أرجع نموذج Gemini استجابة فارغة. يرجى المحاولة مرة أخرى."
+            GeminiDirectFailure.SERVER_ERROR ->
+                "تعذّر توليد التصميم حالياً (خطأ من الخدمة). حاول مجدداً."
+        }
+        return AiDesignUiState.Error(message)
     }
 
     private fun parseStructuredKitchenResponse(

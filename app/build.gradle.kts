@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.kitchendesigner.wovqp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 8
-    versionName = "1.6"
+    versionCode = 9
+    versionName = "1.7"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -108,7 +108,9 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
-  implementation(libs.firebase.ai)
+  // v1.7 — firebase.ai REMOVED: the Gemini feature no longer uses Firebase AI
+  // Logic (it could never initialize without google-services.json); it calls
+  // the Gemini REST API directly via GeminiDirectClient (OkHttp).
   // Uncomment to use Firestore:
   implementation(libs.firebase.firestore)
 

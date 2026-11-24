@@ -1522,6 +1522,9 @@ fun KitchenStudioScreen(
                 currentRoom = state.project.room,
                 unitSystem = state.unitSystem,
                 aiState = state.aiDesignState,
+                hasApiKey = state.hasGeminiApiKey,
+                onSaveApiKey = { viewModel.saveGeminiApiKey(it) },
+                onClearApiKey = { viewModel.clearGeminiApiKey() },
                 onGenerateDesign = { w, d, h, shape, style, island, notes ->
                     viewModel.generateGeminiKitchenDesign(
                         roomWidthMm = w,

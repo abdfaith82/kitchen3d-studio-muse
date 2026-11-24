@@ -30,6 +30,7 @@ import com.example.domain.repository.KitchenProject
 import com.example.domain.repository.KitchenProjectRepository
 import com.example.core.camera.*
 import com.example.core.ai.AiDesignUiState
+import com.example.core.ai.GeminiApiKeyStore
 import com.example.core.ai.GeminiKitchenDesignService
 import com.example.core.ai.KitchenAiStylePreference
 import com.example.core.export.JsonProjectExporter
@@ -158,6 +159,9 @@ data class KitchenEditorUiState(
     val appliedReferencePresetId: String? = null,
     val enabledAccessoryIds: Set<String> = InternalAccessoryType.DEFAULT_ENABLED_IDS,
     val aiDesignState: AiDesignUiState = AiDesignUiState.Idle,
+    // v1.7 — Gemini now uses a direct REST call with a free user key
+    // (GeminiApiKeyStore, AndroidKeyStore-encrypted). No Firebase involved.
+    val hasGeminiApiKey: Boolean = false,
     val isVrGyroModeEnabled: Boolean = false,
     val isVrStereoscopicSplit: Boolean = false,
     val isVrAutoWalkEnabled: Boolean = false,
@@ -232,6 +236,8 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         )
 
     init {
+        // v1.7 — restore the saved Gemini key state (encrypted on-device).
+        _uiState.update { it.copy(hasGeminiApiKey = GeminiApiKeyStore.hasApiKey(application)) }
         viewModelScope.launch {
             autoSaveManager.state.collect { autoSaveUi ->
                 _uiState.update { it.copy(autoSaveState = autoSaveUi) }
@@ -3142,8 +3148,26 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     }
 
     // ==========================================
-    // 13. GEMINI AI KITCHEN DESIGNER (FIREBASE AI LOGIC)
+    // 13. GEMINI AI KITCHEN DESIGNER (DIRECT GEMINI REST API, v1.7)
+    //    No Firebase: the key is the user's free Google AI Studio key,
+    //    stored encrypted on-device via GeminiApiKeyStore.
     // ==========================================
+
+    fun saveGeminiApiKey(apiKey: String) {
+        val saved = GeminiApiKeyStore.saveApiKey(getApplication(), apiKey)
+        _uiState.update {
+            it.copy(
+                hasGeminiApiKey = saved,
+                aiDesignState = if (saved) AiDesignUiState.Idle
+                else AiDesignUiState.Error("تعذّر حفظ المفتاح على هذا الجهاز. حاول مجدداً.")
+            )
+        }
+    }
+
+    fun clearGeminiApiKey() {
+        GeminiApiKeyStore.clearApiKey(getApplication())
+        _uiState.update { it.copy(hasGeminiApiKey = false, aiDesignState = AiDesignUiState.Idle) }
+    }
 
     fun generateGeminiKitchenDesign(
         roomWidthMm: Float,
@@ -3156,6 +3180,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(aiDesignState = AiDesignUiState.Loading) }
+            val apiKey = GeminiApiKeyStore.loadApiKey(getApplication()).orEmpty()
             val result = geminiKitchenDesignService.generateKitchenDesign(
                 roomWidthMm = roomWidthMm,
                 roomDepthMm = roomDepthMm,
@@ -3163,7 +3188,8 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 layoutShape = layoutShape,
                 stylePreference = stylePreference,
                 includeIsland = includeIsland,
-                customNotes = customNotes
+                customNotes = customNotes,
+                apiKey = apiKey
             )
             _uiState.update { it.copy(aiDesignState = result) }
         }
