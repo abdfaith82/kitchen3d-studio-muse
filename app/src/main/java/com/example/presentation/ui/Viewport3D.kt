@@ -34,6 +34,7 @@ import com.example.core.camera.VrCameraNavSubMode
 import com.example.core.camera.VrCameraSensorNavigationOverlay
 import com.example.core.camera.rememberVrGyroscopeEffect
 import com.example.core.geometry.WallGeometryCutter
+import com.example.core.interaction.CameraMotionPolicy
 import com.example.core.math.Vector3
 import com.example.core.units.MeasurementUnitSystem
 import androidx.compose.foundation.clickable
@@ -225,11 +226,25 @@ fun Viewport3D(
     var panVelocity by remember { mutableStateOf(Offset.Zero) }
     var isInteracting by remember { mutableStateOf(false) }
 
+    val currentState by rememberUpdatedState(state)
+
     LaunchedEffect(isInteracting) {
         if (!isInteracting) {
-            while (!isInteracting && (orbitVelocity.getDistanceSquared() > 0.02f || panVelocity.getDistanceSquared() > 0.02f)) {
+            // v1.6 — the old fling spun the camera 40–70° after release
+            // (a per-gesture-event delta applied per frame with a slow 0.93
+            // decay). Velocity is now capped by the policy (≤1.5°/frame,
+            // 0.88 decay → ≤ ~11.4° overshoot), and a button/preset tween
+            // kills the fling instead of fighting it.
+            while (!isInteracting && !currentState.isCameraTweening &&
+                (orbitVelocity.getDistanceSquared() > 0.02f || panVelocity.getDistanceSquared() > 0.02f)
+            ) {
                 withFrameNanos {
-                    if (state.cameraMode == CameraMode.FIRST_PERSON_WALK) {
+                    if (currentState.isCameraTweening) {
+                        orbitVelocity = Offset.Zero
+                        panVelocity = Offset.Zero
+                        return@withFrameNanos
+                    }
+                    if (currentState.cameraMode == CameraMode.FIRST_PERSON_WALK) {
                         onWalkLook?.invoke(orbitVelocity.x, orbitVelocity.y)
                     } else {
                         if (orbitVelocity != Offset.Zero) {
@@ -239,8 +254,8 @@ fun Viewport3D(
                             onPan?.invoke(panVelocity.x, panVelocity.y)
                         }
                     }
-                    orbitVelocity *= 0.93f
-                    panVelocity *= 0.92f
+                    orbitVelocity *= CameraMotionPolicy.FLING_DECAY_PER_FRAME
+                    panVelocity *= CameraMotionPolicy.FLING_DECAY_PER_FRAME
                 }
             }
             if (!isInteracting) {
@@ -249,8 +264,6 @@ fun Viewport3D(
             }
         }
     }
-
-    val currentState by rememberUpdatedState(state)
 
     Box(
         modifier = modifier
@@ -277,8 +290,12 @@ fun Viewport3D(
                         val dampedZoom = 1f + (zoom - 1f) * 0.85f
                         onZoom(dampedZoom)
                         if (pan != Offset.Zero) {
-                            onPan?.invoke(pan.x * 1.6f, pan.y * 1.6f)
-                            panVelocity = Offset(pan.x * 0.8f, pan.y * 0.8f)
+                            // v1.6 — two-finger pan X was inverted (the scene
+                            // moved left when the fingers moved right).
+                            val (pdx, pdy) = CameraMotionPolicy.panDeltaForDrag(pan.x * 1.6f, pan.y * 1.6f)
+                            onPan?.invoke(pdx, pdy)
+                            val (pvx, pvy) = CameraMotionPolicy.panDeltaForDrag(pan.x * 0.8f, pan.y * 0.8f)
+                            panVelocity = Offset(pvx, pvy)
                         }
                         return@detectTransformGestures
                     }
@@ -418,21 +435,27 @@ fun Viewport3D(
 
                     if (pan != Offset.Zero) {
                         if (latestState.cameraMode == CameraMode.FIRST_PERSON_WALK) {
-                            val dyaw = pan.x * 0.28f
-                            val dpitch = pan.y * 0.28f
+                            // v1.6 — walk-look yaw was inverted (drag right
+                            // looked left). Pitch already followed the finger.
+                            val (dyaw, dpitch) = CameraMotionPolicy.walkLookDeltaForDrag(pan.x, pan.y)
                             onWalkLook?.invoke(dyaw, dpitch)
-                            orbitVelocity = Offset(
+                            val (cvx, cvy) = CameraMotionPolicy.cappedFlingVelocity(
                                 orbitVelocity.x * 0.35f + dyaw * 0.65f,
                                 orbitVelocity.y * 0.35f + dpitch * 0.65f
                             )
+                            orbitVelocity = Offset(cvx, cvy)
                         } else {
-                            val dyaw = -pan.x * 0.30f
-                            val dpitch = pan.y * 0.30f
+                            // v1.6 — THE core bug: the orbit drag moved the
+                            // scene OPPOSITE to the finger on both axes
+                            // (verified by projecting a fixed wall point).
+                            // The scene now follows the finger.
+                            val (dyaw, dpitch) = CameraMotionPolicy.orbitDeltaForDrag(pan.x, pan.y)
                             onOrbit(dyaw, dpitch)
-                            orbitVelocity = Offset(
+                            val (cvx, cvy) = CameraMotionPolicy.cappedFlingVelocity(
                                 orbitVelocity.x * 0.35f + dyaw * 0.65f,
                                 orbitVelocity.y * 0.35f + dpitch * 0.65f
                             )
+                            orbitVelocity = Offset(cvx, cvy)
                         }
                     }
                 }

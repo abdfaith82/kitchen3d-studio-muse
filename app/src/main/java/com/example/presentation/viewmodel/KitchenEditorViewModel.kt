@@ -1764,7 +1764,17 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     }
 
     fun updateCameraOrbit(deltaYaw: Float, deltaPitch: Float, fromAutoRotate: Boolean = false) {
-        if (_uiState.value.isCameraTweening) return
+        // v1.6 — a drag arriving mid-tween used to be DROPPED for up to
+        // 320 ms (the button tween blocked it, so the view felt dead right
+        // after tapping a panel button). The user's finger now wins: a
+        // manual orbit cancels the running tween and applies immediately.
+        // The auto-rotate tick is the only caller that must not cancel a
+        // tween (it is already stopped whenever a tween starts).
+        if (_uiState.value.isCameraTweening) {
+            if (fromAutoRotate) return
+            cameraAnimationJob?.cancel()
+            _uiState.update { it.copy(isCameraTweening = false) }
+        }
         // v1.5 — any manual orbit (drag or panel) stops the turntable, so the
         // camera never fights the user's finger. The auto-rotate job itself
         // passes fromAutoRotate = true and is the only caller exempted.
@@ -1782,7 +1792,12 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     }
 
     fun updateCameraPan(deltaX: Float, deltaY: Float) {
-        if (_uiState.value.isCameraTweening) return
+        // v1.6 — same as orbit/zoom: a two-finger pan arriving mid-tween
+        // cancels the tween instead of being dropped for 320 ms.
+        if (_uiState.value.isCameraTweening) {
+            cameraAnimationJob?.cancel()
+            _uiState.update { it.copy(isCameraTweening = false) }
+        }
         _uiState.update {
             it.copy(
                 cameraPanX = it.cameraPanX + deltaX,
@@ -1796,7 +1811,13 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     }
 
     fun updateCameraZoom(factor: Float, fromAutoRotate: Boolean = false) {
-        if (_uiState.value.isCameraTweening) return
+        // v1.6 — same as updateCameraOrbit: a pinch arriving mid-tween
+        // cancels the tween instead of being dropped for 320 ms.
+        if (_uiState.value.isCameraTweening) {
+            if (fromAutoRotate) return
+            cameraAnimationJob?.cancel()
+            _uiState.update { it.copy(isCameraTweening = false) }
+        }
         if (!fromAutoRotate) stopCameraAutoRotate()
         _uiState.update {
             val newZoom = (it.cameraZoom * factor).coerceIn(0.35f, 4.0f)
@@ -1841,35 +1862,42 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         )
         cameraAnimationJob = viewModelScope.launch {
             _uiState.update { it.copy(isCameraTweening = true) }
-            val steps = 20
-            val stepDelay = durationMs / steps
-            for (i in 1..steps) {
-                val interpolated = CameraTweenEngine.interpolatePose(
-                    start = startPose,
-                    target = targetPose,
-                    progress = i.toFloat() / steps,
-                    easing = CameraTweenEngine::easeInOutCubic
-                )
+            try {
+                val steps = 20
+                val stepDelay = durationMs / steps
+                for (i in 1..steps) {
+                    val interpolated = CameraTweenEngine.interpolatePose(
+                        start = startPose,
+                        target = targetPose,
+                        progress = i.toFloat() / steps,
+                        easing = CameraTweenEngine::easeInOutCubic
+                    )
+                    _uiState.update {
+                        it.copy(
+                            cameraYaw = interpolated.yawDegrees,
+                            cameraPitch = interpolated.pitchDegrees,
+                            cameraZoom = interpolated.zoomFactor,
+                            walkLookYaw = interpolated.yawDegrees,
+                            walkLookPitch = interpolated.pitchDegrees
+                        )
+                    }
+                    delay(stepDelay)
+                }
                 _uiState.update {
                     it.copy(
-                        cameraYaw = interpolated.yawDegrees,
-                        cameraPitch = interpolated.pitchDegrees,
-                        cameraZoom = interpolated.zoomFactor,
-                        walkLookYaw = interpolated.yawDegrees,
-                        walkLookPitch = interpolated.pitchDegrees
+                        isCameraTweening = false,
+                        cameraYaw = targetPose.yawDegrees,
+                        cameraPitch = targetPose.pitchDegrees,
+                        cameraZoom = targetPose.zoomFactor,
+                        walkLookYaw = targetPose.yawDegrees,
+                        walkLookPitch = targetPose.pitchDegrees
                     )
                 }
-                delay(stepDelay)
-            }
-            _uiState.update {
-                it.copy(
-                    isCameraTweening = false,
-                    cameraYaw = targetPose.yawDegrees,
-                    cameraPitch = targetPose.pitchDegrees,
-                    cameraZoom = targetPose.zoomFactor,
-                    walkLookYaw = targetPose.yawDegrees,
-                    walkLookPitch = targetPose.pitchDegrees
-                )
+            } finally {
+                // v1.6 — a tween cancelled mid-flight (user grabbed the view)
+                // must never leave the camera locked: clear the flag and keep
+                // the pose wherever the tween had reached.
+                _uiState.update { it.copy(isCameraTweening = false) }
             }
         }
     }
@@ -2053,47 +2081,53 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 )
             }
 
-            val steps = 30
-            val stepDelay = durationMs / steps
+            try {
+                val steps = 30
+                val stepDelay = durationMs / steps
 
-            for (i in 1..steps) {
-                val progress = i.toFloat() / steps
-                val interpolated = CameraTweenEngine.interpolatePose(
-                    start = currentPose,
-                    target = targetPose,
-                    progress = progress,
-                    easing = CameraTweenEngine::easeInOutCubic
-                )
+                for (i in 1..steps) {
+                    val progress = i.toFloat() / steps
+                    val interpolated = CameraTweenEngine.interpolatePose(
+                        start = currentPose,
+                        target = targetPose,
+                        progress = progress,
+                        easing = CameraTweenEngine::easeInOutCubic
+                    )
+
+                    _uiState.update {
+                        it.copy(
+                            cameraMode = interpolated.mode,
+                            cameraYaw = interpolated.yawDegrees,
+                            cameraPitch = interpolated.pitchDegrees,
+                            cameraZoom = interpolated.zoomFactor,
+                            cameraPanX = interpolated.panOffset.x,
+                            cameraPanY = interpolated.panOffset.y,
+                            walkCameraPosition = interpolated.eyePosition,
+                            walkLookYaw = interpolated.yawDegrees,
+                            walkLookPitch = interpolated.pitchDegrees
+                        )
+                    }
+                    delay(stepDelay)
+                }
 
                 _uiState.update {
                     it.copy(
-                        cameraMode = interpolated.mode,
-                        cameraYaw = interpolated.yawDegrees,
-                        cameraPitch = interpolated.pitchDegrees,
-                        cameraZoom = interpolated.zoomFactor,
-                        cameraPanX = interpolated.panOffset.x,
-                        cameraPanY = interpolated.panOffset.y,
-                        walkCameraPosition = interpolated.eyePosition,
-                        walkLookYaw = interpolated.yawDegrees,
-                        walkLookPitch = interpolated.pitchDegrees
+                        isCameraTweening = false,
+                        cameraMode = targetPose.mode,
+                        cameraYaw = targetPose.yawDegrees,
+                        cameraPitch = targetPose.pitchDegrees,
+                        cameraZoom = targetPose.zoomFactor,
+                        cameraPanX = targetPose.panOffset.x,
+                        cameraPanY = targetPose.panOffset.y,
+                        walkCameraPosition = targetPose.eyePosition,
+                        walkLookYaw = targetPose.yawDegrees,
+                        walkLookPitch = targetPose.pitchDegrees
                     )
                 }
-                delay(stepDelay)
-            }
-
-            _uiState.update {
-                it.copy(
-                    isCameraTweening = false,
-                    cameraMode = targetPose.mode,
-                    cameraYaw = targetPose.yawDegrees,
-                    cameraPitch = targetPose.pitchDegrees,
-                    cameraZoom = targetPose.zoomFactor,
-                    cameraPanX = targetPose.panOffset.x,
-                    cameraPanY = targetPose.panOffset.y,
-                    walkCameraPosition = targetPose.eyePosition,
-                    walkLookYaw = targetPose.yawDegrees,
-                    walkLookPitch = targetPose.pitchDegrees
-                )
+            } finally {
+                // v1.6 — same as animateCameraDelta: a cancelled preset tween
+                // must never leave the camera locked.
+                _uiState.update { it.copy(isCameraTweening = false) }
             }
         }
     }
