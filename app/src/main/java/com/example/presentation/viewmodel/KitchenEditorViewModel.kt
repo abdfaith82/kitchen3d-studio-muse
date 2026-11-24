@@ -172,7 +172,10 @@ data class KitchenEditorUiState(
     val cloudSyncStatusMessage: String? = null,
     val currentUserUid: String? = null,
     val currentUserDisplayName: String? = null,
-    val currentUserEmail: String? = null
+    val currentUserEmail: String? = null,
+    // Guest Mode v1.3 — enter with no account; local only, no cloud sync.
+    val isGuestMode: Boolean = false,
+    val guestId: String? = null
 ) {
     val singleSelectedElement: KitchenElement?
         get() = if (selectedElementIds.size == 1) {
@@ -3080,6 +3083,39 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     // ==========================================
     // 16. FIRESTORE CLOUD SYNC FOR AUTHENTICATED GOOGLE USER
     // ==========================================
+
+    // ==========================================
+    // Guest Mode v1.3 — no account, local only.
+    // Cloud sync stays off: currentUserUid is null for a guest, and
+    // the cloud save/sync functions already return early on null uid.
+    // ==========================================
+
+    fun enterGuestMode(guestId: String?) {
+        cloudDesignsJob?.cancel()
+        cloudComponentsJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isGuestMode = true,
+                guestId = guestId,
+                currentUserUid = null,
+                currentUserDisplayName = "ضيف",
+                currentUserEmail = null,
+                cloudDesigns = emptyList(),
+                cloudComponents = emptyList(),
+                cloudSyncStatusMessage = null
+            )
+        }
+    }
+
+    fun exitGuestMode() {
+        _uiState.update {
+            it.copy(
+                isGuestMode = false,
+                guestId = null,
+                currentUserDisplayName = null
+            )
+        }
+    }
 
     fun bindAuthenticatedUser(
         uid: String?,

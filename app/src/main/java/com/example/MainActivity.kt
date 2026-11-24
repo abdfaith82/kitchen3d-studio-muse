@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Architecture
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.*
@@ -41,6 +42,8 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import com.example.core.ai.configureAppCheck
+import com.example.core.auth.GuestAuthPolicy
+import com.example.core.auth.GuestSession
 import com.example.presentation.ui.KitchenStudioScreen
 import com.example.presentation.viewmodel.KitchenEditorViewModel
 import com.example.ui.theme.MyApplicationTheme
@@ -207,8 +210,17 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
 
+    // Guest Mode v1.3 — remembered from SharedPreferences: a returning
+    // guest goes straight into the studio, no gate, no account.
+    val initialGuest = remember { GuestSession.load(context) }
+    var isGuest by remember { mutableStateOf(initialGuest.isGuest) }
+    var guestId by remember { mutableStateOf(initialGuest.guestId) }
+
     LaunchedEffect(auth) {
-        if (auth != null && auth.currentUser == null) {
+        // A guest never needs silent Google sign-in: skip it entirely.
+        if (isGuest) {
+            isCheckingSilentAuth = false
+        } else if (auth != null && auth.currentUser == null) {
             try {
                 attemptAutoSignIn(context.findActivity(), auth)
             } catch (_: Exception) {
@@ -228,16 +240,30 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
         )
     }
 
+    // Keep the ViewModel's guest flag in sync (drives the guest chip in the studio).
+    LaunchedEffect(isGuest, guestId) {
+        if (isGuest) viewModel.enterGuestMode(guestId)
+    }
+
+    /** Leaving the studio back to the gate — from guest mode or a Google account. */
+    fun leaveStudio() {
+        if (isGuest) {
+            GuestSession.exitGuest(context)
+            viewModel.exitGuestMode()
+            isGuest = false
+        }
+        scope.launch {
+            auth?.let { signOutUser(context, it) }
+        }
+    }
+
     val user = currentUser
-    if (user != null) {
-        key(user.uid) {
+    if (user != null || isGuest) {
+        key(user?.uid ?: "guest_${guestId ?: "local"}") {
             KitchenStudioScreen(
                 viewModel = viewModel,
-                onSignOut = {
-                    scope.launch {
-                        auth?.let { signOutUser(context, it) }
-                    }
-                }
+                onSignOut = { leaveStudio() },
+                onUpgradeToAccount = { leaveStudio() }
             )
         }
     } else {
@@ -257,6 +283,11 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
                         }
                     }
                 }
+            },
+            onGuestClick = {
+                val session = GuestSession.enterGuest(context)
+                guestId = session.guestId
+                isGuest = true
             }
         )
     }
@@ -266,7 +297,8 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
 fun GoogleAuthGateScreen(
     isLoading: Boolean,
     errorMessage: String?,
-    onSignInClick: () -> Unit
+    onSignInClick: () -> Unit,
+    onGuestClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -416,6 +448,50 @@ fun GoogleAuthGateScreen(
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "أو",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Guest Mode v1.3 — enter with no account. Local only:
+                // no cloud sync, no restore from another device.
+                OutlinedButton(
+                    onClick = onGuestClick,
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF34D399)),
+                    border = BorderStroke(1.dp, Color(0xFF10B981)),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("guest_sign_in_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = Color(0xFF34D399),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "الدخول كضيف — بدون حساب",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color(0xFF34D399)
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = GuestAuthPolicy.guestLimitsAr(),
+                    fontSize = 12.sp,
+                    color = Color(0xFF94A3B8),
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }

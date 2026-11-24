@@ -45,6 +45,7 @@ import kotlin.math.roundToInt
 fun KitchenStudioScreen(
     viewModel: KitchenEditorViewModel,
     onSignOut: (() -> Unit)? = null,
+    onUpgradeToAccount: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -190,6 +191,50 @@ fun KitchenStudioScreen(
                         )
                     }
 
+                    // Guest Mode v1.3 — visible chip + one-tap upgrade to a Google account.
+                    if (state.isGuestMode) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF064E3B),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+                            modifier = Modifier
+                                .padding(horizontal = 4.dp)
+                                .clickable { onUpgradeToAccount?.invoke() }
+                                .testTag("guest_mode_chip")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = "وضع الضيف",
+                                    tint = Color(0xFF34D399),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "ضيف — على الجهاز فقط",
+                                    color = Color(0xFF34D399),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                        if (onUpgradeToAccount != null) {
+                            IconButton(
+                                onClick = onUpgradeToAccount,
+                                modifier = Modifier.testTag("upgrade_to_account_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Login,
+                                    contentDescription = "تسجيل الدخول بحساب Google لحفظ المشاريع سحابياً",
+                                    tint = Color(0xFF34D399)
+                                )
+                            }
+                        }
+                    }
+
                     if (onSignOut != null) {
                         IconButton(
                             onClick = onSignOut,
@@ -197,7 +242,7 @@ fun KitchenStudioScreen(
                         ) {
                             Icon(
                                 Icons.Default.Logout,
-                                contentDescription = "تسجيل الخروج من حساب Google",
+                                contentDescription = if (state.isGuestMode) "الخروج من وضع الضيف" else "تسجيل الخروج من حساب Google",
                                 tint = Color(0xFFF87171)
                             )
                         }
