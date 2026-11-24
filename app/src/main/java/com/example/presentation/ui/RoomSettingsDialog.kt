@@ -2,7 +2,9 @@ package com.example.presentation.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -101,12 +103,15 @@ fun RoomSettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    // v1.5 — the title Column had no weight, so the long
+                    // subtitle was clipped at the right edge (v1.4 video).
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "3. شاشة مقاسات وتفاصيل غرف المطبخ المستقلة",
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp,
-                            color = Color.White
+                            color = Color.White,
+                            maxLines = 2
                         )
                         Text(
                             text = "أطوال الجدران الفردية، زوايا معالجة عيوب البناء، مناطق أمان النوافذ، وتوزيع نقاط السباكة والغاز والفيش",
@@ -149,13 +154,20 @@ fun RoomSettingsDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Wall Selector Strip (Shared across tabs)
+                // Wall Selector Strip (Shared across tabs) — v1.5: the old
+                // fixed Row held 4 long chips ("الشمالي (360 سم | 90°)") that
+                // exceeded the phone width, so the chips were crushed into
+                // vertical slivers and the rest ran off-screen (v1.4 video).
+                // The strip now scrolls horizontally and the chips are short
+                // (the angle lives in the editor card below, not the chip).
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("الجدار المحدد:", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                    Text("الجدار المحدد:", color = Color(0xFF94A3B8), fontSize = 11.sp, maxLines = 1)
                     WallSide.values().forEach { side ->
                         val wallObj = room.walls.find { it.side == side }
                         FilterChip(
@@ -163,8 +175,9 @@ fun RoomSettingsDialog(
                             onClick = { selectedWallSide = side },
                             label = {
                                 Text(
-                                    "${side.title} (${((wallObj?.lengthMm ?: 0f) / 10f).toInt()} سم | ${wallObj?.cornerAngleDegrees?.toInt() ?: 90}°)",
-                                    fontSize = 10.sp
+                                    "${side.title} • ${((wallObj?.lengthMm ?: 0f) / 10f).toInt()} سم",
+                                    fontSize = 10.sp,
+                                    maxLines = 1
                                 )
                             },
                             colors = FilterChipDefaults.filterChipColors(

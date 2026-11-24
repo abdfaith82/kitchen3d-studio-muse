@@ -2,6 +2,7 @@ package com.example
 
 import com.example.core.interaction.BackPressAction
 import com.example.core.interaction.BackPressPolicy
+import com.example.core.interaction.CutawayPolicy
 import com.example.core.interaction.ElementScalePolicy
 import com.example.core.math.Vector3
 import org.junit.Assert.assertEquals
@@ -69,5 +70,18 @@ class StudioPoliciesTest {
         assertTrue(ElementScalePolicy.canScaleUp(Vector3(600f, 900f, 500f)))
         assertFalse(ElementScalePolicy.canScaleDown(Vector3(150f, 150f, 150f)))
         assertTrue(ElementScalePolicy.canScaleDown(Vector3(600f, 900f, 500f)))
+    }
+
+    // v1.5 — the cutaway must fade smoothly, never pop: full wall at
+    // dot 0.35+, gone at dot 0.05-, linear in between (dot 0.2 -> 0.5).
+    @Test
+    fun testCutawayFadesGraduallyInsteadOfPopping() {
+        assertEquals(1f, CutawayPolicy.fadeAlpha(0.5f), 0.001f)
+        assertEquals(1f, CutawayPolicy.fadeAlpha(0.35f), 0.001f)
+        assertEquals(0.5f, CutawayPolicy.fadeAlpha(0.2f), 0.001f)
+        assertEquals(0f, CutawayPolicy.fadeAlpha(0.05f), 0.001f)
+        assertEquals(0f, CutawayPolicy.fadeAlpha(-0.4f), 0.001f)
+        assertTrue(CutawayPolicy.isFullyCut(0.0f))
+        assertFalse(CutawayPolicy.isFullyCut(0.2f))
     }
 }

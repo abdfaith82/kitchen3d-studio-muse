@@ -653,10 +653,18 @@ fun Viewport3D(
                 }
                 val toCamera = (cameraEye - wallSamplePt).normalized()
                 val facingCameraDot = wall.innerNormal.dot(toCamera)
-                val isForegroundCutaway = state.cameraMode != CameraMode.FIRST_PERSON_WALK && facingCameraDot < 0.08f
+                // v1.5 — GRADUAL cutaway: the old binary switch (dot < 0.08)
+                // made the wall pop in/out in a single frame while orbiting
+                // (the jump seen in the v1.4 video). The wall now fades
+                // smoothly as the camera swings around it: full at
+                // dot >= 0.35, gone at dot <= 0.05, and a low curb keeps the
+                // room bounds readable while it is mostly faded.
+                val cutawayAlpha = if (state.cameraMode == CameraMode.FIRST_PERSON_WALK) 1f
+                else ((facingCameraDot - 0.05f) / 0.30f).coerceIn(0f, 1f)
 
-                if (isForegroundCutaway) {
-                    // Draw a sleek 60mm low architectural plinth curb for foreground cutaway walls so room bounds remain clear
+                fun drawCutawayCurb() {
+                    // Sleek 60mm low architectural plinth curb for foreground
+                    // cutaway walls so room bounds remain clear.
                     val (c0, c1) = when (wall.side) {
                         WallSide.NORTH -> Pair(Vector3(0f, 0f, 0f), Vector3(room.widthMm, 45f, 0f))
                         WallSide.SOUTH -> Pair(Vector3(0f, 0f, room.depthMm), Vector3(room.widthMm, 45f, room.depthMm))
@@ -668,8 +676,13 @@ fun Viewport3D(
                     if (p0 != null && p1 != null) {
                         drawLine(Color(0x5594A3B8), p0, p1, strokeWidth = 2.5f)
                     }
+                }
+
+                if (cutawayAlpha <= 0.02f) {
+                    drawCutawayCurb()
                     return@forEach
                 }
+                if (cutawayAlpha < 0.6f) drawCutawayCurb()
 
                 val blocks = WallGeometryCutter.decomposeWall(wall)
                 for (block in blocks) {
@@ -705,13 +718,13 @@ fun Viewport3D(
                             red = (wallColor.red * shade).coerceIn(0f, 1f),
                             green = (wallColor.green * shade).coerceIn(0f, 1f),
                             blue = (wallColor.blue * shade).coerceIn(0f, 1f),
-                            alpha = 0.96f
+                            alpha = 0.96f * cutawayAlpha
                         )
                         val shadedBottom = wallColor.copy(
                             red = (wallColor.red * shade * 0.86f).coerceIn(0f, 1f),
                             green = (wallColor.green * shade * 0.86f).coerceIn(0f, 1f),
                             blue = (wallColor.blue * shade * 0.86f).coerceIn(0f, 1f),
-                            alpha = 0.98f
+                            alpha = 0.98f * cutawayAlpha
                         )
                         drawPath(
                             wallPath,
@@ -721,7 +734,7 @@ fun Viewport3D(
                                 endY = max(pt0.first.y, pt1.first.y)
                             )
                         )
-                        drawPath(wallPath, color = Color(0x441E293B), style = Stroke(width = 1.3f))
+                        drawPath(wallPath, color = Color(0x441E293B).copy(alpha = 0.27f * cutawayAlpha), style = Stroke(width = 1.3f))
                     }
                 }
 
@@ -759,8 +772,8 @@ fun Viewport3D(
                             close()
                         }
                         val frameColor = if (opening.type == OpeningType.DOOR) Color(0xCC4A3525) else Color(0xAABAE6FD)
-                        drawPath(framePath, color = frameColor)
-                        drawPath(framePath, color = Color(0xFF0F172A), style = Stroke(width = 3.5f))
+                        drawPath(framePath, color = frameColor.copy(alpha = frameColor.alpha * cutawayAlpha))
+                        drawPath(framePath, color = Color(0xFF0F172A).copy(alpha = cutawayAlpha), style = Stroke(width = 3.5f))
                     }
                 }
             }
@@ -914,9 +927,15 @@ fun Viewport3D(
                 // gap — faces were already sun-shaded, but nothing anchored the
                 // cabinets to the floor). Two nested footprint shadows: a wide
                 // faint penumbra + a tight darker core, slightly offset down-screen.
-                if (state.realismSettings.contactShadows && elem.position.y <= 10f) {
+                // v1.5 — Wall cabinets now cast a fainter footprint shadow on the
+                // floor below them too (their footprint projected down to y = 0):
+                // before, upper cabinets floated with no grounding at all.
+                if (state.realismSettings.contactShadows) {
+                    val isFloorStanding = elem.position.y <= 10f
                     val bottomCorners = listOf(corners3D[0], corners3D[1], corners3D[2], corners3D[3])
-                    val projectedFoot = bottomCorners.mapNotNull { project3DTo2D(it)?.first }
+                    val footCorners = if (isFloorStanding) bottomCorners
+                    else bottomCorners.map { it.copy(y = 0f) }
+                    val projectedFoot = footCorners.mapNotNull { project3DTo2D(it)?.first }
                     if (projectedFoot.size == 4) {
                         val footCx = projectedFoot.sumOf { it.x.toDouble() }.toFloat() / 4f
                         val footCy = projectedFoot.sumOf { it.y.toDouble() }.toFloat() / 4f
@@ -927,8 +946,12 @@ fun Viewport3D(
                             }
                             close()
                         }
-                        drawPath(shadowPath(1.12f, 5f), color = Color.Black.copy(alpha = 0.14f))
-                        drawPath(shadowPath(1.0f, 3f), color = Color.Black.copy(alpha = 0.26f))
+                        val outerAlpha = if (isFloorStanding) 0.14f else 0.08f
+                        val coreAlpha = if (isFloorStanding) 0.26f else 0.15f
+                        val dyOuter = if (isFloorStanding) 5f else 2f
+                        val dyCore = if (isFloorStanding) 3f else 1f
+                        drawPath(shadowPath(1.12f, dyOuter), color = Color.Black.copy(alpha = outerAlpha))
+                        drawPath(shadowPath(1.0f, dyCore), color = Color.Black.copy(alpha = coreAlpha))
                     }
                 }
 

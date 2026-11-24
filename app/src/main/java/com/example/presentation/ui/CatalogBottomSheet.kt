@@ -74,8 +74,13 @@ fun CatalogBottomSheet(
     val cornerCount = remember(allUnits) { allUnits.count { it.isCornerUnit } }
     val drawerCount = remember(allUnits) { allUnits.count { it.code.contains("drawer") } }
 
+    // v1.5 — the sheet used to open half-expanded (ModalBottomSheet default):
+    // on a phone only the header sliver was visible and the title + buttons
+    // were crushed into a 60dp column (seen in the v1.4 video). It now opens
+    // fully, and the header is two rows so nothing can clip.
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Color(0xFF0F172A),
         contentColor = Color.White,
         modifier = modifier
@@ -85,19 +90,26 @@ fun CatalogBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            // Header with total library count badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+            // Header with total library count badge — v1.5: two rows. The old
+            // single Row (title + badge + two buttons + close) exceeded the
+            // phone width, so the title was crushed word-by-word into a
+            // ~60dp vertical sliver at the right edge (v1.4 video).
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
                             text = "المكتبة الشاملة للخزائن والكورنرات",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = Color.White,
+                            maxLines = 2
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Surface(
@@ -109,17 +121,25 @@ fun CatalogBottomSheet(
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF38BDF8),
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }
-                    Text(
-                        text = "خزائن سفلية، علوية، كورنرات علوية وسفلية، تاج للسقف، فيترينة LED وأجهزة",
-                        fontSize = 11.sp,
-                        color = Color(0xFF94A3B8)
-                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color(0xFF94A3B8))
+                    }
                 }
+                Text(
+                    text = "خزائن سفلية، علوية، كورنرات علوية وسفلية، تاج للسقف، فيترينة LED وأجهزة",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -135,7 +155,7 @@ fun CatalogBottomSheet(
                                 .height(34.dp)
                                 .testTag("catalog_open_photo_cabinet_designer_btn")
                         ) {
-                            Text("تصميم خزانة من صور 360°", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("تصميم خزانة من صور 360°", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
                         }
                     }
                     if (onExportJson != null) {
@@ -150,11 +170,8 @@ fun CatalogBottomSheet(
                         ) {
                             Icon(Icons.Default.DataObject, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("استخراج JSON", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("استخراج JSON", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                         }
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color(0xFF94A3B8))
                     }
                 }
             }

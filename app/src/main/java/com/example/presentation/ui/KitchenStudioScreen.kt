@@ -35,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.camera.CameraMode
+import com.example.core.camera.CameraNavigationPreset
 import com.example.domain.model.ElementCategory
 import com.example.domain.model.KitchenElementType
 import com.example.presentation.viewmodel.*
@@ -1048,13 +1049,14 @@ fun KitchenStudioScreen(
             if (state.viewMode == ViewMode.PERSPECTIVE_3D || state.viewMode == ViewMode.SPLIT_VIEW) {
                 CameraControlPanel(
                     isAutoRotate = state.isCameraAutoRotate,
+                    // v1.5 — panel buttons glide (320 ms ease) instead of
+                    // jumping ±15° / ×1.15 in one frame (the v1.4 video).
+                    // Drag on the viewport itself stays instant.
                     onOrbit = { dyaw, dpitch ->
-                        viewModel.stopCameraAutoRotate()
-                        viewModel.updateCameraOrbit(dyaw, dpitch)
+                        viewModel.animateCameraDelta(dyaw, dpitch, 1f)
                     },
                     onZoom = { factor ->
-                        viewModel.stopCameraAutoRotate()
-                        viewModel.updateCameraZoom(factor)
+                        viewModel.animateCameraDelta(0f, 0f, factor)
                     },
                     onPreset = { preset ->
                         viewModel.stopCameraAutoRotate()
@@ -1062,7 +1064,7 @@ fun KitchenStudioScreen(
                     },
                     onResetCamera = {
                         viewModel.stopCameraAutoRotate()
-                        viewModel.setCameraPose(yawDegrees = 35f, pitchDegrees = 30f, zoomFactor = 1.0f)
+                        viewModel.animateCameraToPreset(CameraNavigationPreset.PERSPECTIVE)
                     },
                     onToggleAutoRotate = { viewModel.toggleCameraAutoRotate() },
                     onRealisticView = { viewModel.applyRealisticViewPreset() },

@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
@@ -101,12 +104,20 @@ fun CameraControlPanel(
 
         Surface(
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFF0F172A).copy(alpha = 0.92f),
+            color = Color(0xFF0F172A).copy(alpha = 0.88f),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
             modifier = Modifier.testTag("camera_control_panel")
         ) {
+            // v1.5 — the panel was a tall opaque column covering half the
+            // scene while the user adjusted the camera (v1.4 video): presets
+            // are now a 2-column grid, the panel is slightly see-through,
+            // scrolls on small screens, and collapses by itself after a
+            // preset/realistic-view tap so the result is visible at once.
             Column(
-                modifier = Modifier.padding(10.dp),
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -148,7 +159,8 @@ fun CameraControlPanel(
                     }
                 }
 
-                // View presets (animated, like global apps)
+                // View presets (animated, like global apps) — 2-column grid
+                // so the panel is half as tall as the v1.4 single column.
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(
                         CameraNavigationPreset.PERSPECTIVE to "منظور عام",
@@ -156,22 +168,34 @@ fun CameraControlPanel(
                         CameraNavigationPreset.TOP_VIEW to "مسقط علوي",
                         CameraNavigationPreset.FRONT_ELEVATION to "واجهة أمامية",
                         CameraNavigationPreset.SIDE_ELEVATION to "واجهة جانبية"
-                    ).forEach { (preset, label) ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF1E293B),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onPreset(preset) }
-                                .testTag("camera_preset_${preset.name.lowercase()}")
-                        ) {
-                            Text(
-                                text = label,
-                                color = Color(0xFFE2E8F0),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
+                    ).chunked(2).forEach { pair ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            pair.forEach { (preset, label) ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF1E293B),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            onPreset(preset)
+                                            expanded = false
+                                        }
+                                        .testTag("camera_preset_${preset.name.lowercase()}")
+                                ) {
+                                    Text(
+                                        text = label,
+                                        color = Color(0xFFE2E8F0),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                            // Keep the last row's single button from stretching
+                            // full-width when the pair has only one preset.
+                            if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -183,7 +207,10 @@ fun CameraControlPanel(
                     color = Color(0xFF0284C7).copy(alpha = 0.30f),
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { onPreset(CameraNavigationPreset.FOCUS_SELECTION) }
+                        .clickable {
+                            onPreset(CameraNavigationPreset.FOCUS_SELECTION)
+                            expanded = false
+                        }
                         .testTag("camera_preset_focus_selection")
                 ) {
                     Text(
@@ -238,7 +265,10 @@ fun CameraControlPanel(
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B)),
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable { onRealisticView() }
+                        .clickable {
+                            onRealisticView()
+                            expanded = false
+                        }
                         .testTag("camera_realistic_view_btn")
                 ) {
                     Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {

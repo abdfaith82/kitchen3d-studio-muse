@@ -75,3 +75,22 @@ object BackPressPolicy {
         else -> BackPressAction.ASK_EXIT
     }
 }
+
+/**
+ * v1.5 — Smooth architectural cutaway fade.
+ *
+ * The old binary switch (wall visible / gone at dot < 0.08) made walls pop
+ * in and out in a single frame while orbiting — the jump seen in the v1.4
+ * video. The fade is linear: the wall is fully opaque at dot 0.35, fully
+ * gone at dot 0.05, and fades smoothly in between. First-person walk never
+ * cuts walls (the user is inside the room).
+ */
+object CutawayPolicy {
+    const val FADE_START_DOT = 0.35f
+    const val FADE_END_DOT = 0.05f
+
+    fun fadeAlpha(facingCameraDot: Float): Float =
+        ((facingCameraDot - FADE_END_DOT) / (FADE_START_DOT - FADE_END_DOT)).coerceIn(0f, 1f)
+
+    fun isFullyCut(facingCameraDot: Float): Boolean = fadeAlpha(facingCameraDot) <= 0.02f
+}

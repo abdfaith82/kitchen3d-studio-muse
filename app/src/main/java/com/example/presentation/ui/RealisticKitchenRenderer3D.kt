@@ -523,6 +523,19 @@ object RealisticKitchenRenderer3D {
             )
         }
 
+        // v1.5 — Full ceiling plane: the tray + LED lines floated in the
+        // dark background with no surface under them (the "floating LED
+        // frame" in the v1.4 video). A subtle ceiling slab now anchors the
+        // tray and the spotlights, and the tray itself is less transparent.
+        drawQuad3D(
+            Vector3(0f, h - 1f, 0f),
+            Vector3(w, h - 1f, 0f),
+            Vector3(w, h - 1f, d),
+            Vector3(0f, h - 1f, d),
+            project = project,
+            fillColor = Color(0xFFF1F5F9).copy(alpha = 0.42f)
+        )
+
         // B. Gypsum Ceiling Tray & Recessed LED Spotlights + Linear LED Channels
         val trayMargin = 550f
         if (w > trayMargin * 2 && d > trayMargin * 2) {
@@ -533,7 +546,7 @@ object RealisticKitchenRenderer3D {
                 Vector3(w - trayMargin, h - 40f, d - trayMargin),
                 Vector3(trayMargin, h - 40f, d - trayMargin),
                 project = project,
-                fillColor = Color(0x28F8FAFC),
+                fillColor = Color(0x59F8FAFC),
                 strokeColor = Color(0xCCFEF08A), // Hidden cove LED strip glow
                 strokeWidth = 3.5f
             )

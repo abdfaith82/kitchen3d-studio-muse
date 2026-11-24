@@ -243,12 +243,15 @@ fun PhotoCabinetDesignerDialog(
                                 Icon(Icons.Default.ViewInAr, contentDescription = null, tint = Color(0xFFFBBF24))
                             }
                         }
-                        Column {
+                        // v1.5 — the title Column had no weight, so the long
+                        // title squeezed the close button and wrapped badly.
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "لوحة تصميم الخزائن من صور أمامية وجانبية (360° Complete Cabinet)",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = Color.White,
+                                maxLines = 2
                             )
                             Text(
                                 text = "استيراد صورة أمامية وجانبية • ظهر كامل وجنب كامل 18 مم لتكون الخزانة مكتملة من جميع الجهات",
@@ -329,10 +332,13 @@ fun PhotoCabinetDesignerDialog(
                                 }
                             }
 
+                            // v1.5 — the preview was 210dp with the cabinet
+                            // drawn small and low in its box (v1.4 video): it
+                            // is now taller and the cabinet is centred + bigger.
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(210.dp)
+                                    .height(260.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(Color(0xFF090D16))
                                     .pointerInput(Unit) {
@@ -780,7 +786,9 @@ fun PhotoCabinetDesignerDialog(
                     ) {
                         Icon(Icons.Default.AddCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("إدراج الخزانة الكاملة (360°) في التصميم", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        // v1.5 — the old long label wrapped and clipped at the
+                        // bottom edge of the dialog (v1.4 video).
+                        Text("إدراج الخزانة في التصميم", fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                     }
                 }
             }
@@ -810,9 +818,9 @@ private fun Complete360CabinetPreviewCanvas(
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val cx = size.width * 0.5f
-        val cy = size.height * 0.54f
+        val cy = size.height * 0.50f
         val maxDim = maxOf(widthCm, heightCm, depthCm).coerceAtLeast(40f)
-        val scale = (minOf(size.width, size.height) * 0.58f) / maxDim
+        val scale = (minOf(size.width, size.height) * 0.72f) / maxDim
 
         val hw = widthCm * 0.5f * scale
         val hh = heightCm * 0.5f * scale

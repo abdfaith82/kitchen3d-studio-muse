@@ -1763,8 +1763,12 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         }
     }
 
-    fun updateCameraOrbit(deltaYaw: Float, deltaPitch: Float) {
+    fun updateCameraOrbit(deltaYaw: Float, deltaPitch: Float, fromAutoRotate: Boolean = false) {
         if (_uiState.value.isCameraTweening) return
+        // v1.5 — any manual orbit (drag or panel) stops the turntable, so the
+        // camera never fights the user's finger. The auto-rotate job itself
+        // passes fromAutoRotate = true and is the only caller exempted.
+        if (!fromAutoRotate) stopCameraAutoRotate()
         _uiState.update {
             val newYaw = (it.cameraYaw + deltaYaw) % 360f
             val maxPitch = if (it.cameraMode == CameraMode.TOP_DOWN) 89.8f else 88f
@@ -1791,11 +1795,82 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         _uiState.update { it.copy(cameraPanX = 0f, cameraPanY = 0f) }
     }
 
-    fun updateCameraZoom(factor: Float) {
+    fun updateCameraZoom(factor: Float, fromAutoRotate: Boolean = false) {
         if (_uiState.value.isCameraTweening) return
+        if (!fromAutoRotate) stopCameraAutoRotate()
         _uiState.update {
             val newZoom = (it.cameraZoom * factor).coerceIn(0.35f, 4.0f)
             it.copy(cameraZoom = newZoom)
+        }
+    }
+
+    // ==========================================
+    // v1.5 — RADICAL movement fix. The #1 complaint in the v1.4 video:
+    // every panel button jumped the camera instantly (±15° orbit, ×1.15
+    // zoom) and walls popped in/out of the cutaway in one frame. Buttons
+    // now tween like the presets do (320 ms, easeInOutCubic, shortest-path
+    // yaw lerp); the drag gesture stays instant (continuous input must
+    // never lag). Any button press also stops the turntable first.
+    // ==========================================
+
+    fun animateCameraDelta(deltaYaw: Float, deltaPitch: Float, zoomFactor: Float, durationMs: Long = 320L) {
+        stopCameraAutoRotate()
+        cameraAnimationJob?.cancel()
+        val s = _uiState.value
+        val isWalk = s.cameraMode == CameraMode.FIRST_PERSON_WALK
+        val startYaw = if (isWalk) s.walkLookYaw else s.cameraYaw
+        val startPitch = if (isWalk) s.walkLookPitch else s.cameraPitch
+        val maxPitch = if (s.cameraMode == CameraMode.TOP_DOWN) 89.8f else 88f
+        val minPitch = if (s.cameraMode == CameraMode.TOP_DOWN) 75f else 5f
+        val targetYaw = (startYaw + deltaYaw) % 360f
+        val targetPitch = (startPitch + deltaPitch).coerceIn(minPitch, maxPitch)
+        val targetZoom = (s.cameraZoom * zoomFactor).coerceIn(0.35f, 4.0f)
+        if (targetYaw == startYaw && targetPitch == startPitch && targetZoom == s.cameraZoom) return
+        val startPose = CameraPose(
+            mode = s.cameraMode,
+            eyePosition = s.walkCameraPosition,
+            yawDegrees = startYaw,
+            pitchDegrees = startPitch,
+            zoomFactor = s.cameraZoom,
+            panOffset = Vector3(s.cameraPanX, s.cameraPanY, 0f)
+        )
+        val targetPose = startPose.copy(
+            yawDegrees = (targetYaw + 360f) % 360f,
+            pitchDegrees = targetPitch,
+            zoomFactor = targetZoom
+        )
+        cameraAnimationJob = viewModelScope.launch {
+            _uiState.update { it.copy(isCameraTweening = true) }
+            val steps = 20
+            val stepDelay = durationMs / steps
+            for (i in 1..steps) {
+                val interpolated = CameraTweenEngine.interpolatePose(
+                    start = startPose,
+                    target = targetPose,
+                    progress = i.toFloat() / steps,
+                    easing = CameraTweenEngine::easeInOutCubic
+                )
+                _uiState.update {
+                    it.copy(
+                        cameraYaw = interpolated.yawDegrees,
+                        cameraPitch = interpolated.pitchDegrees,
+                        cameraZoom = interpolated.zoomFactor,
+                        walkLookYaw = interpolated.yawDegrees,
+                        walkLookPitch = interpolated.pitchDegrees
+                    )
+                }
+                delay(stepDelay)
+            }
+            _uiState.update {
+                it.copy(
+                    isCameraTweening = false,
+                    cameraYaw = targetPose.yawDegrees,
+                    cameraPitch = targetPose.pitchDegrees,
+                    cameraZoom = targetPose.zoomFactor,
+                    walkLookYaw = targetPose.yawDegrees,
+                    walkLookPitch = targetPose.pitchDegrees
+                )
+            }
         }
     }
 
@@ -1843,7 +1918,10 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         if (!turningOn) return
         cameraAutoRotateJob = viewModelScope.launch {
             while (_uiState.value.isCameraAutoRotate) {
-                updateCameraOrbit(1.0f, 0f)
+                // v1.5 — 8°/s instead of 20°/s: the old speed spun the room
+                // too fast to follow (seen in the v1.4 video). fromAutoRotate
+                // so the orbit does not cancel itself via updateCameraOrbit.
+                updateCameraOrbit(0.4f, 0f, fromAutoRotate = true)
                 delay(50)
             }
         }
@@ -1888,7 +1966,9 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             sunElevationDeg = 75f,
             artificialLightIntensity = 1.0f
         )
-        setCameraPose(yawDegrees = 35f, pitchDegrees = 30f, zoomFactor = 1.0f)
+        // v1.5 — smooth glide to the standard perspective instead of an
+        // instant jump (same complaint as the orbit buttons).
+        animateCameraToPreset(CameraNavigationPreset.PERSPECTIVE)
     }
 
     /**
