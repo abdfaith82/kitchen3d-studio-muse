@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -44,6 +45,8 @@ import androidx.credentials.exceptions.NoCredentialException
 import com.example.core.ai.configureAppCheck
 import com.example.core.auth.GuestAuthPolicy
 import com.example.core.auth.GuestSession
+import com.example.core.interaction.BackPressAction
+import com.example.core.interaction.BackPressPolicy
 import com.example.presentation.ui.KitchenStudioScreen
 import com.example.presentation.viewmodel.KitchenEditorViewModel
 import com.example.ui.theme.MyApplicationTheme
@@ -209,6 +212,27 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
     var isCheckingSilentAuth by remember { mutableStateOf(auth?.currentUser == null) }
     var authErrorMessage by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
+    var showExitConfirm by remember { mutableStateOf(false) }
+    val studioState by viewModel.uiState.collectAsState()
+
+    // v1.4 — the system back button never exits the app silently (the #1
+    // complaint from the videos: one accidental back press lost the session).
+    // Priority: close an open dialog → clear the selection → exit clean
+    // canvas → only then ask "هل تريد الخروج؟" with an explicit choice.
+    BackHandler {
+        when (
+            BackPressPolicy.nextAction(
+                hasOpenDialog = studioState.activeDialog != null,
+                hasSelection = studioState.selectedElementIds.isNotEmpty(),
+                isCleanCanvasMode = studioState.isCleanCanvasMode
+            )
+        ) {
+            BackPressAction.CLOSE_DIALOG -> viewModel.openDialog(null)
+            BackPressAction.CLEAR_SELECTION -> viewModel.clearSelection()
+            BackPressAction.EXIT_CLEAN_CANVAS -> viewModel.toggleCleanCanvasMode()
+            BackPressAction.ASK_EXIT -> showExitConfirm = true
+        }
+    }
 
     // Guest Mode v1.3 — remembered from SharedPreferences: a returning
     // guest goes straight into the studio, no gate, no account.
@@ -289,6 +313,28 @@ fun KitchenAppRoot(viewModel: KitchenEditorViewModel) {
                 guestId = session.guestId
                 isGuest = true
             }
+        )
+    }
+
+    // Exit warning dialog (v1.4): the back button never exits silently.
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            title = { Text("هل تريد الخروج من التطبيق؟", fontWeight = FontWeight.Bold) },
+            text = { Text("سيتم حفظ مشروعك تلقائياً قبل الخروج، ويمكنك العودة إليه لاحقاً.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showExitConfirm = false
+                        viewModel.triggerLifecycleAutoSave()
+                        (context as? Activity)?.finish()
+                    }
+                ) { Text("خروج", color = Color(0xFFEF4444), fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitConfirm = false }) { Text("إلغاء") }
+            },
+            modifier = Modifier.testTag("exit_confirm_dialog")
         )
     }
 }

@@ -36,6 +36,8 @@ import com.example.core.export.JsonProjectExporter
 import com.example.core.filament.CinematicTimeOfDay
 import com.example.core.filament.RealismSettings
 import com.example.core.filament.ReferenceRealismEngine
+import com.example.core.filament.RenderQuality
+import com.example.core.interaction.ElementScalePolicy
 import com.example.core.i18n.AppLanguage
 import com.example.core.i18n.KitchenRegion
 import com.example.core.units.MeasurementUnitSystem
@@ -85,6 +87,7 @@ sealed class ActiveDialog {
     data object RenderStudio : ActiveDialog()
     data object CinematicPro : ActiveDialog()
     data object GlobalStudio : ActiveDialog()
+    data object GlobalOptions : ActiveDialog()
     data object ExportStudio : ActiveDialog()
     data object ErgonomicInspector : ActiveDialog()
     data object AutoSaveSettings : ActiveDialog()
@@ -118,6 +121,7 @@ data class KitchenEditorUiState(
     val isWalkSprinting: Boolean = false,
     val walkCollisionFeedback: String? = null,
     val isCameraTweening: Boolean = false,
+    val isCameraAutoRotate: Boolean = false,
     val activeCameraPreset: CameraNavigationPreset? = null,
     val activeDialog: ActiveDialog? = null,
     val undoRedoState: UndoRedoState = UndoRedoState(),
@@ -1533,6 +1537,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     // ==========================================
 
     private var cameraAnimationJob: Job? = null
+    private var cameraAutoRotateJob: Job? = null
 
     fun setViewMode(mode: ViewMode) {
         _uiState.update { it.copy(viewMode = mode) }
@@ -1792,6 +1797,98 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             val newZoom = (it.cameraZoom * factor).coerceIn(0.35f, 4.0f)
             it.copy(cameraZoom = newZoom)
         }
+    }
+
+    // ==========================================
+    // v1.4 — Scale selected elements (was missing entirely:
+    // rotate / delete / duplicate existed, enlarge / shrink did not).
+    // Same undo pattern as rotateSelected: apply + commitTransformCommand.
+    // ==========================================
+
+    fun scaleSelectedElements(factor: Float) {
+        val selected = _uiState.value.selectedElements
+        if (selected.isEmpty()) return
+        selected.forEach { elem ->
+            val oldDims = elem.dimensions
+            val newDims = ElementScalePolicy.scaledDimensions(oldDims, factor)
+            if (newDims == oldDims) return@forEach
+            applyElementTransform(elem.id, elem.position, elem.rotationY, newDims)
+            commitTransformCommand(elem.id, elem.position, elem.rotationY, oldDims)
+        }
+    }
+
+    /** Restore the selected elements to their type's default dimensions. */
+    fun resetSelectedScale() {
+        val selected = _uiState.value.selectedElements
+        if (selected.isEmpty()) return
+        selected.forEach { elem ->
+            val defaultDims = elem.type.defaultDimensions
+            if (elem.dimensions == defaultDims) return@forEach
+            applyElementTransform(elem.id, elem.position, elem.rotationY, defaultDims)
+            commitTransformCommand(elem.id, elem.position, elem.rotationY, elem.dimensions)
+        }
+    }
+
+    // ==========================================
+    // v1.4 — Turntable auto-rotate (global-apps style camera control).
+    // A slow continuous orbit (~20°/s) for presenting the kitchen; any
+    // manual orbit/zoom/preset cancels it so it never fights the user.
+    // ==========================================
+
+    fun toggleCameraAutoRotate() {
+        val turningOn = !_uiState.value.isCameraAutoRotate
+        cameraAutoRotateJob?.cancel()
+        cameraAutoRotateJob = null
+        _uiState.update { it.copy(isCameraAutoRotate = turningOn) }
+        if (!turningOn) return
+        cameraAutoRotateJob = viewModelScope.launch {
+            while (_uiState.value.isCameraAutoRotate) {
+                updateCameraOrbit(1.0f, 0f)
+                delay(50)
+            }
+        }
+    }
+
+    fun stopCameraAutoRotate() {
+        if (!_uiState.value.isCameraAutoRotate) return
+        cameraAutoRotateJob?.cancel()
+        cameraAutoRotateJob = null
+        _uiState.update { it.copy(isCameraAutoRotate = false) }
+    }
+
+    // ==========================================
+    // v1.4 — One-tap realistic view (daylight + ULTRA realism).
+    // The live renderer already shades faces by sun direction; this preset
+    // puts the sun at noon, maxes the realism settings that feed the
+    // 4K exporter, and frames the room in the standard perspective.
+    // ==========================================
+
+    fun applyRealisticViewPreset() {
+        stopCameraAutoRotate()
+        applyRealismSettings(
+            RealismSettings(
+                softShadows = true,
+                softShadowRadius = 0.85f,
+                ambientOcclusion = 0.85f,
+                contactShadows = true,
+                reflections = 0.90f,
+                floorReflection = 0.85f,
+                ledGlow = 0.90f,
+                acesToneMapping = true,
+                denoiser = true,
+                glassRefraction = true,
+                bloom = 0.80f,
+                vignette = 0.30f,
+                filmGrain = 0.05f,
+                quality = RenderQuality.ULTRA
+            )
+        )
+        updateLightingSimulation(
+            sunAzimuthDeg = 15f,
+            sunElevationDeg = 75f,
+            artificialLightIntensity = 1.0f
+        )
+        setCameraPose(yawDegrees = 35f, pitchDegrees = 30f, zoomFactor = 1.0f)
     }
 
     /**

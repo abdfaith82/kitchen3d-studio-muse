@@ -38,6 +38,8 @@ fun TransformControlsBar(
     onOpenMaterials: () -> Unit = {},
     onOpenFillerTool: () -> Unit = {},
     onToggleExpanded: () -> Unit = {},
+    onScale: (Float) -> Unit = {},
+    onResetScale: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val selected = state.singleSelectedElement ?: return
@@ -176,6 +178,43 @@ fun TransformControlsBar(
                     Icon(Icons.Default.RotateRight, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
                     Text("تدوير 90°", fontSize = 10.sp)
+                }
+
+                // v1.4 — Scale selected element: enlarge / shrink / reset (was missing entirely)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier
+                        .background(Color(0xFF1E293B), RoundedCornerShape(8.dp))
+                        .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    IconButton(
+                        onClick = { onScale(1f / 1.10f) },
+                        enabled = com.example.core.interaction.ElementScalePolicy.canScaleDown(selected.dimensions),
+                        modifier = Modifier.size(26.dp).testTag("scale_down_button")
+                    ) {
+                        Icon(Icons.Default.ZoomOut, contentDescription = "تصغير العنصر 10%", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                    }
+                    Text(
+                        text = "${com.example.core.interaction.ElementScalePolicy.scalePercent(selected.dimensions, selected.type.defaultDimensions)}%",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick = { onScale(1.10f) },
+                        enabled = com.example.core.interaction.ElementScalePolicy.canScaleUp(selected.dimensions),
+                        modifier = Modifier.size(26.dp).testTag("scale_up_button")
+                    ) {
+                        Icon(Icons.Default.ZoomIn, contentDescription = "تكبير العنصر 10%", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(
+                        onClick = onResetScale,
+                        modifier = Modifier.size(26.dp).testTag("scale_reset_button")
+                    ) {
+                        Icon(Icons.Default.AspectRatio, contentDescription = "إعادة الحجم الأصلي", tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                    }
                 }
 
                 // Smart Snapping 1mm Badge (Sticky)

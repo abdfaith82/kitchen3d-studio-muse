@@ -909,6 +909,29 @@ fun Viewport3D(
                 val isElemSelected = elem.id in selectedIds
                 val isElemColliding = (isElemSelected && activeCol?.hasCollision == true) || elem.id in collidingIdSet
 
+                // v1.4 — Soft contact shadow: grounds floor-standing cabinets on the
+                // floor so they stop floating (the single biggest live-view realism
+                // gap — faces were already sun-shaded, but nothing anchored the
+                // cabinets to the floor). Two nested footprint shadows: a wide
+                // faint penumbra + a tight darker core, slightly offset down-screen.
+                if (state.realismSettings.contactShadows && elem.position.y <= 10f) {
+                    val bottomCorners = listOf(corners3D[0], corners3D[1], corners3D[2], corners3D[3])
+                    val projectedFoot = bottomCorners.mapNotNull { project3DTo2D(it)?.first }
+                    if (projectedFoot.size == 4) {
+                        val footCx = projectedFoot.sumOf { it.x.toDouble() }.toFloat() / 4f
+                        val footCy = projectedFoot.sumOf { it.y.toDouble() }.toFloat() / 4f
+                        fun shadowPath(scale: Float, dyPx: Float): Path = Path().apply {
+                            projectedFoot.forEachIndexed { i, pt ->
+                                val p = Offset(footCx + (pt.x - footCx) * scale, footCy + (pt.y - footCy) * scale + dyPx)
+                                if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+                            }
+                            close()
+                        }
+                        drawPath(shadowPath(1.12f, 5f), color = Color.Black.copy(alpha = 0.14f))
+                        drawPath(shadowPath(1.0f, 3f), color = Color.Black.copy(alpha = 0.26f))
+                    }
+                }
+
                 renderCabinetRealisticDetails(
                     elem = elem,
                     cameraEye = cameraEye,

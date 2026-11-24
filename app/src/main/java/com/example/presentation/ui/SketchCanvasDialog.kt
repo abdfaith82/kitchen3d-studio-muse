@@ -440,17 +440,14 @@ fun SketchCanvasDialog(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 // Main Area: Realistic 2D Sketch Blueprint Canvas + Live 3D Split Preview
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                // v1.4 fix: the side-by-side Row squeezed both panes on portrait
+                // phones (canvas ~200dp, preview ~150dp) — labels overlapped and
+                // the preview was unusable (seen in the user's video). Portrait now
+                // stacks vertically: full-width canvas + a 230dp preview below.
+                val sketchCanvasPane: @Composable (Modifier) -> Unit = { paneModifier ->
                     // Left/Main: Realistic Architectural Blueprint Sketch Pad
                     Box(
-                        modifier = Modifier
-                            .weight(if (showLive3DSplitPreview) 1.35f else 1f)
-                            .fillMaxHeight()
+                        modifier = paneModifier
                             .background(Color(0xFF040D1A), RoundedCornerShape(14.dp))
                             .border(1.dp, Color(0xFF1E3A5F), RoundedCornerShape(14.dp))
                             .pointerInput(strokes, canvasSize) {
@@ -590,16 +587,18 @@ fun SketchCanvasDialog(
                                 textSize = 24f
                                 isFakeBoldText = true
                                 isAntiAlias = true
+                                textAlign = android.graphics.Paint.Align.CENTER
                             }
                             val subPaint = Paint().apply {
                                 color = android.graphics.Color.parseColor("#34D399")
                                 textSize = 20f
                                 isFakeBoldText = true
                                 isAntiAlias = true
+                                textAlign = android.graphics.Paint.Align.CENTER
                             }
 
                             // 3. Draw Completed Architectural Strokes (Double-line walls with hatching, cabinets with depth, live dimensions)
-                            strokes.forEach { stroke ->
+                            strokes.forEachIndexed { strokeIndex, stroke ->
                                 val s = stroke.start
                                 val e = stroke.end
                                 if (s != null && e != null) {
@@ -663,17 +662,40 @@ fun SketchCanvasDialog(
                                         center = e
                                     )
 
-                                    // Dimension label in cm on every drawn segment
+                                    // Dimension label in cm on every drawn segment.
+                                    // v1.4 fix: labels were drawn bare at a fixed offset, so
+                                    // neighbouring labels overlapped each other and the
+                                    // strokes (seen in the video). Each label now gets a
+                                    // dark pill background and sits on the stroke normal,
+                                    // alternating sides so adjacent labels never collide.
                                     val mid = Offset((s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f)
                                     val lengthMm = stroke.customLengthMmOverride ?: (stroke.lengthPx * scale)
                                     val lengthCm = (lengthMm / 10f).roundToInt()
                                     val label = "${stroke.type.shortTitle}: $lengthCm سم"
-                                    drawContext.canvas.nativeCanvas.drawText(
-                                        label,
-                                        mid.x - 45f,
-                                        mid.y - 12f,
-                                        if (isSelected) subPaint else dimPaint
+                                    val labelSide = if (strokeIndex % 2 == 0) -1f else 1f
+                                    val labelCx = mid.x + nx * 30f * labelSide
+                                    val labelCy = mid.y + ny * 30f * labelSide
+                                    val labelPaint = if (isSelected) subPaint else dimPaint
+                                    val labelW = labelPaint.measureText(label)
+                                    val labelRect = android.graphics.RectF(
+                                        labelCx - labelW / 2f - 10f, labelCy - 22f,
+                                        labelCx + labelW / 2f + 10f, labelCy + 8f
                                     )
+                                    val labelBg = Paint().apply {
+                                        color = android.graphics.Color.argb(215, 15, 23, 42)
+                                        style = android.graphics.Paint.Style.FILL
+                                        isAntiAlias = true
+                                    }
+                                    val labelBorder = Paint().apply {
+                                        color = if (isSelected) android.graphics.Color.argb(255, 52, 211, 153)
+                                        else android.graphics.Color.argb(200, 56, 189, 248)
+                                        style = android.graphics.Paint.Style.STROKE
+                                        strokeWidth = 2f
+                                        isAntiAlias = true
+                                    }
+                                    drawContext.canvas.nativeCanvas.drawRoundRect(labelRect, 9f, 9f, labelBg)
+                                    drawContext.canvas.nativeCanvas.drawRoundRect(labelRect, 9f, 9f, labelBorder)
+                                    drawContext.canvas.nativeCanvas.drawText(label, labelCx, labelCy, labelPaint)
                                 }
                             }
 
@@ -739,13 +761,20 @@ fun SketchCanvasDialog(
                                 val liveDistMm = (snapRes.end - snapRes.start).getDistance() * scale
                                 val liveCm = (liveDistMm / 10f).roundToInt()
                                 val mid = Offset((snapRes.start.x + snapRes.end.x) * 0.5f, (snapRes.start.y + snapRes.end.y) * 0.5f)
-                                drawContext.canvas.nativeCanvas.drawText(
-                                    "📏 $liveCm سم (${snapRes.angleDegrees.roundToInt()}°)" +
-                                            if (snapRes.snappedEndTarget != null) " [التصاق مغناطيسي ✓]" else "",
-                                    mid.x - 50f,
-                                    mid.y - 16f,
-                                    subPaint
+                                // v1.4: same pill treatment as the segment labels.
+                                val liveLabel = "📏 $liveCm سم (${snapRes.angleDegrees.roundToInt()}°)" +
+                                    if (snapRes.snappedEndTarget != null) " [التصاق مغناطيسي ✓]" else ""
+                                val liveW = subPaint.measureText(liveLabel)
+                                val liveRect = android.graphics.RectF(
+                                    mid.x - liveW / 2f - 10f, mid.y - 42f,
+                                    mid.x + liveW / 2f + 10f, mid.y - 12f
                                 )
+                                drawContext.canvas.nativeCanvas.drawRoundRect(liveRect, 9f, 9f, Paint().apply {
+                                    color = android.graphics.Color.argb(215, 15, 23, 42)
+                                    style = android.graphics.Paint.Style.FILL
+                                    isAntiAlias = true
+                                })
+                                drawContext.canvas.nativeCanvas.drawText(liveLabel, mid.x, mid.y - 20f, subPaint)
                             }
 
                             // 5. Calibration Marker
@@ -810,12 +839,12 @@ fun SketchCanvasDialog(
                         }
                     }
 
+                }
+                val sketchPreviewPane: @Composable (Modifier) -> Unit = { paneModifier ->
                     // Right Pane: Live 3D Isometric Room & Cabinets Preview (updates in real time as user draws!)
                     if (showLive3DSplitPreview) {
                         Surface(
-                            modifier = Modifier
-                                .weight(0.95f)
-                                .fillMaxHeight(),
+                            modifier = paneModifier,
                             shape = RoundedCornerShape(14.dp),
                             color = Color(0xFF020617),
                             border = BorderStroke(1.dp, Color(0xFF0284C7))
@@ -938,6 +967,30 @@ fun SketchCanvasDialog(
                                     fontSize = 10.sp
                                 )
                             }
+                        }
+                    }
+                }
+                // Portrait stacks vertically, landscape keeps the side-by-side split.
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    if (maxWidth < maxHeight) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            sketchCanvasPane(Modifier.weight(1f).fillMaxWidth())
+                            sketchPreviewPane(Modifier.fillMaxWidth().height(230.dp))
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            sketchCanvasPane(Modifier.weight(if (showLive3DSplitPreview) 1.35f else 1f).fillMaxHeight())
+                            sketchPreviewPane(Modifier.weight(0.95f).fillMaxHeight())
                         }
                     }
                 }

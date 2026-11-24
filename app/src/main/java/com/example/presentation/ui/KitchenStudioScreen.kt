@@ -480,6 +480,14 @@ fun KitchenStudioScreen(
                         Icon(Icons.Default.Public, contentDescription = "الاستوديو العالمي: لغات ومطابخ مرجعية وواقعية", tint = Color(0xFF22D3EE))
                     }
 
+                    // Global Options v1.4 Button (خيارات التطبيقات العالمية في مكان واحد)
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.GlobalOptions) },
+                        modifier = Modifier.testTag("open_global_options_button")
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = "خيارات عالمية: العرض والوحدات والمشي والدوران", tint = Color(0xFF34D399))
+                    }
+
                     // Bill of Materials Export Icon
                     IconButton(
                         onClick = { viewModel.openDialog(ActiveDialog.BillOfMaterialsDialog) },
@@ -1034,9 +1042,68 @@ fun KitchenStudioScreen(
                 }
             }
 
+            // v1.4 — Camera Control Panel (visible perspective control: orbit / tilt /
+            // zoom / presets / reset / auto-rotate / realistic view). Top-start so it
+            // never collides with the Viewport3D pills on the top-end side.
+            if (state.viewMode == ViewMode.PERSPECTIVE_3D || state.viewMode == ViewMode.SPLIT_VIEW) {
+                CameraControlPanel(
+                    isAutoRotate = state.isCameraAutoRotate,
+                    onOrbit = { dyaw, dpitch ->
+                        viewModel.stopCameraAutoRotate()
+                        viewModel.updateCameraOrbit(dyaw, dpitch)
+                    },
+                    onZoom = { factor ->
+                        viewModel.stopCameraAutoRotate()
+                        viewModel.updateCameraZoom(factor)
+                    },
+                    onPreset = { preset ->
+                        viewModel.stopCameraAutoRotate()
+                        viewModel.animateCameraToPreset(preset)
+                    },
+                    onResetCamera = {
+                        viewModel.stopCameraAutoRotate()
+                        viewModel.setCameraPose(yawDegrees = 35f, pitchDegrees = 30f, zoomFactor = 1.0f)
+                    },
+                    onToggleAutoRotate = { viewModel.toggleCameraAutoRotate() },
+                    onRealisticView = { viewModel.applyRealisticViewPreset() },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 8.dp, top = 8.dp)
+                )
+            }
+
+            // v1.4 — Clean Canvas exit pill: clean canvas used to hide every panel
+            // with no visible way back, so users got stuck with no tools at all.
+            if (state.isCleanCanvasMode) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF0F172A).copy(alpha = 0.88f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF34D399)),
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 10.dp, bottom = 10.dp)
+                        .clickable { viewModel.toggleCleanCanvasMode() }
+                        .testTag("exit_clean_canvas_btn")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, tint = Color(0xFF34D399), modifier = Modifier.size(16.dp))
+                        Text("إظهار الأدوات", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
             // Bottom-aligned Transform Controls Bar (Compact quick-action bar when element is selected)
+            // v1.4 fix: this bar used to disappear in Clean Canvas mode, so a selected
+            // element showed only the tiny 3D gizmo and no way to scale / delete it
+            // (seen in the user's video). The selection tool now ALWAYS shows when
+            // something is selected — clean canvas hides the big panels, never the
+            // tool for the selected element.
             AnimatedVisibility(
-                visible = state.selectedElementIds.isNotEmpty() && !state.isCleanCanvasMode,
+                visible = state.selectedElementIds.isNotEmpty(),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 6.dp)
@@ -1056,6 +1123,19 @@ fun KitchenStudioScreen(
                             modifier = Modifier.size(30.dp).testTag("duplicate_button")
                         ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = "تكرار", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                        }
+                        // v1.4 — Scale: enlarge / shrink the selected element (was missing entirely)
+                        IconButton(
+                            onClick = { viewModel.scaleSelectedElements(1f / 1.10f) },
+                            modifier = Modifier.size(30.dp).testTag("quick_scale_down")
+                        ) {
+                            Icon(Icons.Default.ZoomOut, contentDescription = "تصغير العنصر", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                        }
+                        IconButton(
+                            onClick = { viewModel.scaleSelectedElements(1.10f) },
+                            modifier = Modifier.size(30.dp).testTag("quick_scale_up")
+                        ) {
+                            Icon(Icons.Default.ZoomIn, contentDescription = "تكبير العنصر", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                         }
                         IconButton(
                             onClick = { viewModel.deleteSelectedElements() },
@@ -1098,7 +1178,9 @@ fun KitchenStudioScreen(
                         onOpenAluminumCalculator = { viewModel.openDialog(ActiveDialog.AluminumMelamineCalculator) },
                         onOpenMaterials = { viewModel.openDialog(ActiveDialog.Materials) },
                         onOpenFillerTool = { viewModel.openDialog(ActiveDialog.CabinetFillerTool) },
-                        onToggleExpanded = { viewModel.toggleTransformBarExpanded() }
+                        onToggleExpanded = { viewModel.toggleTransformBarExpanded() },
+                        onScale = { factor -> viewModel.scaleSelectedElements(factor) },
+                        onResetScale = { viewModel.resetSelectedScale() }
                     )
                 }
             }
@@ -1376,6 +1458,20 @@ fun KitchenStudioScreen(
                 state = state,
                 viewModel = viewModel,
                 onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        is ActiveDialog.GlobalOptions -> {
+            GlobalOptionsDialog(
+                state = state,
+                onDismiss = { viewModel.openDialog(null) },
+                onSetViewMode = { mode -> viewModel.setViewMode(mode) },
+                onToggleLiveDimensions = { viewModel.toggleLiveDimensions() },
+                onToggleSmartSnapping = { viewModel.toggleSmartSnapping() },
+                onSetUnitSystem = { system -> viewModel.setUnitSystem(system) },
+                onSetCameraMode = { mode -> viewModel.setCameraMode(mode) },
+                onToggleAutoRotate = { viewModel.toggleCameraAutoRotate() },
+                onRealisticView = { viewModel.applyRealisticViewPreset() },
+                onOpenDialog = { dialog -> viewModel.openDialog(dialog) }
             )
         }
         is ActiveDialog.ExportStudio -> {
