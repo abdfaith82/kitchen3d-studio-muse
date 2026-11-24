@@ -11,8 +11,12 @@ import com.example.domain.model.KitchenElementType
 import com.example.domain.model.RoomStructure
 import com.example.domain.model.WallSide
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.coroutines.coroutineContext
@@ -203,6 +207,11 @@ data class RenderResult(
  */
 object OffscreenRenderer4K {
 
+    // v1.11: 2x2 jittered sub-pixel offsets for anti-aliasing (photographic edges).
+    private val AA_OFFSETS = arrayOf(
+        0.25f to 0.25f, 0.75f to 0.25f, 0.25f to 0.75f, 0.75f to 0.75f
+    )
+
     // Internal ray representation for 3D scene traversal
     private data class Ray(val origin: Vector3, val direction: Vector3)
 
@@ -234,6 +243,7 @@ object OffscreenRenderer4K {
         exposure: CameraExposure = CameraExposure(),
         resolutionPreset: RenderResolutionPreset = RenderResolutionPreset.FHD_1080P,
         postProcessConfig: CinematicPostProcessConfig = CinematicPostProcessConfig(),
+        enableAntiAliasing: Boolean = true,
         onProgress: (RenderProgress) -> Unit = {}
     ): RenderResult = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
