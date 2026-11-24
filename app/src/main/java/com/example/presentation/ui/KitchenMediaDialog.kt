@@ -1,16 +1,26 @@
 package com.example.presentation.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.view.ViewGroup
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.VideoView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,12 +30,15 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
@@ -99,6 +112,27 @@ private val FREE_IMAGE_SITES = listOf(
 )
 
 /**
+ * v1.10 — video source rule: the user's own camera/gallery photo wins
+ * over the generated image — the video is animated FROM the photo.
+ * Pure function, unit-tested.
+ */
+fun chooseVideoSourceFile(referenceFile: File?, generatedFile: File?): File? =
+    referenceFile ?: generatedFile
+
+/** Saves a camera/gallery bitmap as a JPEG in the app cache (for upload). */
+fun saveBitmapToCacheFile(context: Context, bitmap: Bitmap, name: String): File? {
+    return try {
+        val file = File(context.cacheDir, name)
+        file.outputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        if (file.exists() && file.length() > 1024) file else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/**
  * v1.9 — Kitchen Media: the same chain the user asked for in the sibling
  * app, adapted to this kitchen: text → image → video.
  *  1) 📝 نص: an English visual prompt is built automatically from the
@@ -119,6 +153,72 @@ fun KitchenMediaDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableIntStateOf(0) }
+
+    // --- v1.10 camera: the user's own kitchen photo as the chain's input.
+    // TakePicturePreview needs the CAMERA permission at runtime; the photo
+    // picker needs none. The photo is saved as a cache JPEG so Magic Hour
+    // can upload it as the video's first frame.
+    var referenceFile by remember { mutableStateOf<File?>(null) }
+    var referenceBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var referenceSource by remember { mutableStateOf<String?>(null) } // "camera" | "gallery"
+    var cameraStatus by remember { mutableStateOf<String?>(null) }
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    fun usePhotoBitmap(bmp: Bitmap, source: String) {
+        val file = saveBitmapToCacheFile(
+            context, bmp, "kitchen-camera-ref-${System.currentTimeMillis()}.jpg"
+        )
+        if (file != null) {
+            referenceFile = file
+            referenceBitmap = bmp.asImageBitmap()
+            referenceSource = source
+            cameraStatus = if (source == "camera") {
+                "تم التقاط صورة مطبخك ✓ — ستكون الإطار الأول للفيديو."
+            } else {
+                "تم اختيار الصورة من المعرض ✓ — ستكون الإطار الأول للفيديو."
+            }
+        } else {
+            cameraStatus = "تعذر حفظ الصورة — جرّب مرة أخرى."
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bmp: Bitmap? -> if (bmp != null) usePhotoBitmap(bmp, "camera") }
+    val galleryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                context.contentResolver.openInputStream(it)?.use { stream ->
+                    BitmapFactory.decodeStream(stream)?.let { bmp ->
+                        usePhotoBitmap(bmp, "gallery")
+                    }
+                }
+            } catch (_: Exception) {
+                cameraStatus = "تعذر قراءة الصورة المختارة."
+            }
+        }
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+        if (granted) cameraLauncher.launch(null)
+        else cameraStatus = "الكاميرا تحتاج إذناً — اسمح به من إعدادات التطبيق."
+    }
+    // WebView file chooser (sites tab): lets the user upload the camera
+    // photo to Raphael/Leonardo from inside the site.
+    var webFileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val webFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        webFileChooserCallback?.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+        webFileChooserCallback = null
+    }
     val tabs = listOf("🖼️ صورة واقعية", "🎬 فيديو متحرك", "🌐 مواقع مجانية")
 
     // --- Shared chain state: the prompt and the generated image ---
@@ -216,9 +316,9 @@ fun KitchenMediaDialog(
     }
 
     fun startVideo() {
-        val file = imageFile
+        val file = chooseVideoSourceFile(referenceFile, imageFile)
         if (file == null) {
-            videoStatus = "ولّد صورة أولاً من تبويب «صورة واقعية»."
+            videoStatus = "صوّر مطبخك بالكاميرا أو ولّد صورة أولاً من تبويب «صورة واقعية»."
             return
         }
         val key = MagicHourKeyStore.loadApiKey(context)
@@ -317,6 +417,92 @@ fun KitchenMediaDialog(
                     when (tab) {
                         0 -> {
                             // ===== IMAGE TAB =====
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = Color(0xFF1E3A5F).copy(alpha = 0.5f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
+                                    modifier = Modifier.fillMaxWidth().testTag("camera_reference_card")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "📷 صورة مرجعية من كاميرتك (اختياري)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "صوّر مطبخك الحقيقي — الصورة تصبح الإطار الأول للفيديو في التبويب التالي، ويمكنك رفعها لمواقع الصور من تبويب المواقع.",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFFCBD5E1)
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                onClick = {
+                                                    if (hasCameraPermission) cameraLauncher.launch(null)
+                                                    else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                                },
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                                modifier = Modifier.weight(1f).testTag("camera_capture_button")
+                                            ) {
+                                                Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("الكاميرا", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    galleryPicker.launch(
+                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                    )
+                                                },
+                                                modifier = Modifier.weight(1f).testTag("gallery_pick_button")
+                                            ) {
+                                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("من المعرض", fontSize = 11.sp)
+                                            }
+                                        }
+                                        if (cameraStatus != null) {
+                                            Text(text = cameraStatus!!, color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                                        }
+                                        if (referenceBitmap != null) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                androidx.compose.foundation.Image(
+                                                    bitmap = referenceBitmap!!,
+                                                    contentDescription = "صورة مطبخك المرجعية",
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .size(72.dp)
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .testTag("camera_reference_photo")
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "صورتك المرجعية جاهزة ✓",
+                                                    color = Color(0xFF34D399),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                IconButton(
+                                                    onClick = {
+                                                        referenceFile = null
+                                                        referenceBitmap = null
+                                                        referenceSource = null
+                                                        cameraStatus = null
+                                                    },
+                                                    modifier = Modifier.testTag("remove_camera_reference_button")
+                                                ) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "إزالة الصورة", tint = Color(0xFFFCA5A5))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             item {
                                 Text(
                                     text = "النمط (يُبنى منه الوصف تلقائياً):",
@@ -537,6 +723,19 @@ fun KitchenMediaDialog(
                                 }
                             }
                             item {
+                                val videoSource = chooseVideoSourceFile(referenceFile, imageFile)
+                                Text(
+                                    text = when {
+                                        referenceFile != null -> "🎬 مصدر الفيديو: صورتك من ${if (referenceSource == "camera") "الكاميرا" else "المعرض"} — ستتحرك كما هي."
+                                        videoSource != null -> "🎬 مصدر الفيديو: الصورة المولّدة."
+                                        else -> "🎬 لا يوجد مصدر بعد — صوّر مطبخك أو ولّد صورة من التبويب الأول."
+                                    },
+                                    color = Color(0xFFF59E0B),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            item {
                                 Text(
                                     text = "نموذج الفيديو (مجاني — 480p):",
                                     fontWeight = FontWeight.Bold,
@@ -731,6 +930,20 @@ fun KitchenMediaDialog(
                                             settings.javaScriptEnabled = true
                                             settings.domStorageEnabled = true
                                             webViewClient = WebViewClient()
+                                            // Upload support: a site's "upload image" button
+                                            // opens the gallery and hands the photo to the page.
+                                            webChromeClient = object : WebChromeClient() {
+                                                override fun onShowFileChooser(
+                                                    view: WebView?,
+                                                    filePathCallback: ValueCallback<Array<Uri>>,
+                                                    fileChooserParams: FileChooserParams
+                                                ): Boolean {
+                                                    webFileChooserCallback?.onReceiveValue(null)
+                                                    webFileChooserCallback = filePathCallback
+                                                    webFilePicker.launch("image/*")
+                                                    return true
+                                                }
+                                            }
                                             val startUrl = FREE_IMAGE_SITES[selectedSite].url
                                             loadUrl(startUrl)
                                             webViewLoadedUrl[0] = startUrl

@@ -3,11 +3,18 @@ package com.example
 import com.example.core.ai.KitchenAiStylePreference
 import com.example.core.media.KitchenVisualPrompt
 import com.example.core.media.MagicHourClient
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.example.core.media.PollinationsImageClient
+import com.example.presentation.ui.chooseVideoSourceFile
+import com.example.presentation.ui.saveBitmapToCacheFile
+import java.io.File
 import com.example.domain.model.RoomLayoutShape
 import com.example.domain.model.RoomStructure
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.robolectric.RuntimeEnvironment
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -95,6 +102,25 @@ class KitchenMediaTest {
         val (status, url) = MagicHourClient.parseProjectStatus(raw)
         assertEquals("rendering", status)
         assertEquals(null, url)
+    }
+
+    @Test
+    fun `camera photo wins over generated image as video source`() {
+        val ref = File("ref.jpg")
+        val gen = File("gen.jpg")
+        assertEquals(ref, chooseVideoSourceFile(ref, gen))
+        assertEquals(gen, chooseVideoSourceFile(null, gen))
+        assertEquals(null, chooseVideoSourceFile(null, null))
+    }
+
+    @Test
+    fun `saveBitmapToCacheFile writes a decodable jpeg`() {
+        val ctx = RuntimeEnvironment.getApplication().applicationContext
+        val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val file = saveBitmapToCacheFile(ctx, bmp, "test-ref.jpg")
+        assertNotNull(file)
+        assertTrue(file!!.exists() && file.length() > 100)
+        assertNotNull(BitmapFactory.decodeFile(file.absolutePath))
     }
 
     @Test
