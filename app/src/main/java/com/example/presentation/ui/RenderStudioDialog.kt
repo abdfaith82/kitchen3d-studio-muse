@@ -126,6 +126,9 @@ fun RenderStudioDialog(
 
     // Offscreen 4K Render state (Default to UHD_4K so the user gets 4K cinematic output out-of-the-box)
     var selectedResolution by remember { mutableStateOf(RenderResolutionPreset.UHD_4K) }
+    // v1.11: 2x2 jittered anti-aliasing (photographic edges) — on by default;
+    // the parallel tile renderer pays for its 4x ray cost.
+    var enableAntiAliasing by remember { mutableStateOf(true) }
     var isRendering by remember { mutableStateOf(false) }
     var renderProgress by remember { mutableStateOf<RenderProgress?>(null) }
     var lastRenderResult by remember { mutableStateOf<RenderResult?>(null) }
@@ -215,6 +218,7 @@ fun RenderStudioDialog(
                 exposure = exposure,
                 resolutionPreset = selectedResolution,
                 postProcessConfig = postConfig,
+                enableAntiAliasing = enableAntiAliasing,
                 onProgress = { prog ->
                     renderProgress = prog
                 }
@@ -520,6 +524,27 @@ fun RenderStudioDialog(
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
                                         )
                                     }
+                                }
+
+                                // v1.11: anti-aliasing toggle (2x2 supersampling)
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (enableAntiAliasing) Color(0xFF1E3A8A) else Color(0xFF1E293B),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (enableAntiAliasing) Color(0xFF38BDF8) else Color(0xFF334155)
+                                    ),
+                                    modifier = Modifier
+                                        .clickable { enableAntiAliasing = !enableAntiAliasing }
+                                        .testTag("toggle_render_aa")
+                                ) {
+                                    Text(
+                                        text = if (enableAntiAliasing) "تنعيم الحواف ✓" else "تنعيم الحواف",
+                                        color = if (enableAntiAliasing) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (enableAntiAliasing) FontWeight.Bold else FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                                    )
                                 }
 
                                 // Primary 4K Cinematic Render Button

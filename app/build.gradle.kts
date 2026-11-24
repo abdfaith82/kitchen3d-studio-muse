@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.kitchendesigner.wovqp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 12
-    versionName = "1.10"
+    versionCode = 13
+    versionName = "1.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

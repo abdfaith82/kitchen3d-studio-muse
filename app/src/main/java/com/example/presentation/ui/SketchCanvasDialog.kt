@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -99,21 +100,18 @@ fun SketchCanvasDialog(
         )
     }
 
-    // Trigger instant 3D conversion to the main scene as soon as a stroke is drawn!
-    fun triggerLive3DSync(updatedStrokes: List<DrawnStroke>) {
-        if (!isInstant3DConversionEnabled || updatedStrokes.isEmpty()) return
-        val result = SketchTo3DEngine.convertStrokesToScene(
-            strokes = updatedStrokes,
-            calibration = calibrationMarker,
-            canvasWidthPx = max(300f, canvasSize.x),
-            canvasHeightPx = max(300f, canvasSize.y),
-            ceilingHeightMm = 2700f,
-            autoPopulateCabinetsOnWalls = autoPopulateKitchenUnits
-        )
+    // v1.11: the instant 3D sync to the main scene reuses the conversion above
+    // instead of running it a second time per committed stroke (it used to run
+    // once in `remember` and once in the old manual sync helper). One conversion
+    // per commit, applied after composition. Keyed on strokes + autoPopulate so
+    // the "auto cabinets" toggle also re-syncs; canvas resizes only refresh the
+    // local preview and never touch the main scene.
+    LaunchedEffect(strokes, autoPopulateKitchenUnits) {
+        if (!isInstant3DConversionEnabled || strokes.isEmpty()) return@LaunchedEffect
         if (onApplyGeneratedScene != null) {
-            onApplyGeneratedScene(result.room, result.generatedElements)
+            onApplyGeneratedScene(liveConversionResult.room, liveConversionResult.generatedElements)
         } else {
-            onApplyGeneratedRoom(result.room)
+            onApplyGeneratedRoom(liveConversionResult.room)
         }
     }
 
@@ -167,7 +165,7 @@ fun SketchCanvasDialog(
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(10.dp),
+                .padding(4.dp),
             shape = RoundedCornerShape(20.dp),
             color = Color(0xFF0F172A),
             tonalElevation = 12.dp,
@@ -176,7 +174,7 @@ fun SketchCanvasDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(14.dp)
+                    .padding(10.dp)
             ) {
                 // Top Header
                 Row(
@@ -276,7 +274,6 @@ fun SketchCanvasDialog(
                             selected = autoPopulateKitchenUnits,
                             onClick = {
                                 autoPopulateKitchenUnits = !autoPopulateKitchenUnits
-                                triggerLive3DSync(strokes)
                             },
                             label = { Text("فرش خزائن تلقائي", fontSize = 11.sp) }
                         )
@@ -357,7 +354,6 @@ fun SketchCanvasDialog(
                                 if (strokes.isNotEmpty()) {
                                     val updated = strokes.dropLast(1)
                                     strokes = updated
-                                    triggerLive3DSync(updated)
                                 }
                             },
                             enabled = strokes.isNotEmpty(),
@@ -421,7 +417,6 @@ fun SketchCanvasDialog(
                                             if (it.id == selectedStroke.id) it.copy(customLengthMmOverride = newMm) else it
                                         }
                                         strokes = updated
-                                        triggerLive3DSync(updated)
                                     }
                                     selectedStrokeId = null
                                 },
@@ -448,9 +443,10 @@ fun SketchCanvasDialog(
                     // Left/Main: Realistic Architectural Blueprint Sketch Pad
                     Box(
                         modifier = paneModifier
+                            .onSizeChanged { canvasSize = Offset(it.width.toFloat(), it.height.toFloat()) }
                             .background(Color(0xFF040D1A), RoundedCornerShape(14.dp))
                             .border(1.dp, Color(0xFF1E3A5F), RoundedCornerShape(14.dp))
-                            .pointerInput(strokes, canvasSize) {
+                            .pointerInput(canvasSize) {
                                 detectTapGestures { tapOffset ->
                                     // Tap near an existing stroke to edit its exact length in cm
                                     val hit = strokes.minByOrNull { st ->
@@ -474,9 +470,7 @@ fun SketchCanvasDialog(
                                 isCalibrating,
                                 activeStrokeType,
                                 isMagneticAutoSnapEnabled,
-                                isFreehandMultiCornerEnabled,
-                                isInstant3DConversionEnabled,
-                                strokes
+                                isFreehandMultiCornerEnabled
                             ) {
                                 detectDragGestures(
                                     onDragStart = { startPos ->
@@ -509,7 +503,6 @@ fun SketchCanvasDialog(
                                                 if (newSegments.isNotEmpty()) {
                                                     val updated = strokes + newSegments
                                                     strokes = updated
-                                                    triggerLive3DSync(updated)
                                                 }
                                             } else {
                                                 val snapRes = if (isMagneticAutoSnapEnabled) {
@@ -531,7 +524,6 @@ fun SketchCanvasDialog(
                                                         snappedToEndVertex = snapRes.snappedEndTarget != null
                                                     )
                                                     strokes = updated
-                                                    triggerLive3DSync(updated)
                                                 }
                                             }
                                         }
@@ -545,7 +537,6 @@ fun SketchCanvasDialog(
                             }
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            canvasSize = Offset(size.width, size.height)
                             val scale = calibrationMarker?.mmPerPixel ?: (4200f / max(300f, size.width * 0.68f))
 
                             // 1. Background Blueprint / Camera Photo if present
@@ -814,7 +805,6 @@ fun SketchCanvasDialog(
                                         DrawnStroke(points = listOf(Offset(w * 0.24f, h * 0.23f), Offset(w * 0.76f, h * 0.23f)), type = StrokeType.WALL_CABINET)
                                     )
                                     strokes = presetStrokes
-                                    triggerLive3DSync(presetStrokes)
                                 },
                                 label = { Text("غرفة كاملة + مطبخ 3D", fontSize = 10.sp, color = Color(0xFF38BDF8)) }
                             )
@@ -832,7 +822,6 @@ fun SketchCanvasDialog(
                                         DrawnStroke(points = listOf(Offset(w * 0.21f, h * 0.28f), Offset(w * 0.21f, h * 0.70f)), type = StrokeType.BASE_CABINET)
                                     )
                                     strokes = presetStrokes
-                                    triggerLive3DSync(presetStrokes)
                                 },
                                 label = { Text("سكتش مطبخ L-Shape", fontSize = 10.sp, color = Color(0xFF34D399)) }
                             )
@@ -982,7 +971,7 @@ fun SketchCanvasDialog(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             sketchCanvasPane(Modifier.weight(1f).fillMaxWidth())
-                            sketchPreviewPane(Modifier.fillMaxWidth().height(230.dp))
+                            sketchPreviewPane(Modifier.fillMaxWidth().height(180.dp))
                         }
                     } else {
                         Row(
@@ -995,7 +984,7 @@ fun SketchCanvasDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Bottom Convert & Apply to 3D Studio Action
                 Button(

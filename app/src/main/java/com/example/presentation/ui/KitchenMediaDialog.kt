@@ -272,14 +272,20 @@ fun KitchenMediaDialog(
     var videoStatus by remember { mutableStateOf<String?>(null) }
     var videoProjectId by remember { mutableStateOf<String?>(null) }
     var videoFile by remember { mutableStateOf<File?>(null) }
+    // v1.11: polling progress (attempts of 60) + a nonce to resume polling
+    // after a timeout without re-uploading the image.
+    var videoPollAttempts by remember { mutableIntStateOf(0) }
+    var videoPollNonce by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(videoProjectId) {
+    LaunchedEffect(videoProjectId, videoPollNonce) {
         val id = videoProjectId ?: return@LaunchedEffect
         val key = MagicHourKeyStore.loadApiKey(context) ?: return@LaunchedEffect
         var attempts = 0
+        videoPollAttempts = 0
         while (attempts < 60) {
             delay(5000)
             attempts++
+            videoPollAttempts = attempts
             val res = MagicHourClient.projectStatus(id, key)
             res.onSuccess { (status, url) ->
                 videoStatus = "حالة الفيديو: $status (تحقق $attempts)"
@@ -303,6 +309,7 @@ fun KitchenMediaDialog(
                     }
                     "error", "canceled" -> {
                         videoBusy = false
+                        videoProjectId = null
                         videoStatus = "فشل توليد الفيديو ($status) — جرّب نموذجاً آخر أو أعد المحاولة."
                         return@LaunchedEffect
                     }
@@ -360,6 +367,8 @@ fun KitchenMediaDialog(
     // Reading webView.url would reload the site home whenever the user
     // navigates inside it, so the loaded URL is tracked separately.
     val webViewLoadedUrl = remember { arrayOf<String?>(null) }
+    // v1.11: holder for the WebView instance so the reload button can reach it.
+    val webViewRef = remember { arrayOf<WebView?>(null) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -410,11 +419,142 @@ fun KitchenMediaDialog(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    when (tab) {
+                // v1.11: the browser tab is NOT a LazyColumn item anymore —
+                // the WebView fills the dialog and scrolls with its own
+                // gestures (inside a LazyColumn the outer list stole the
+                // swipes and the page sat in a fixed 480dp box). Tabs 0/1 stay lazy.
+                if (tab == 2) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                    // ===== FREE SITES TAB =====
+                        Text(
+                            text = "مواقع توليد الصور المجانية من لقطتك — افتح أياً منها، وسجّل دخولك إن طلب، ثم الصق الوصف المنسوخ من زر النسخ بالأسفل.",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 11.sp
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("kitchen prompt", promptText))
+                                promptCopied = true
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("copy_media_prompt_button")
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (promptCopied) "تم نسخ الوصف ✓ — الصقه في الموقع" else "📋 نسخ وصف الصورة",
+                                fontSize = 12.sp
+                            )
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(FREE_IMAGE_SITES) { site ->
+                                val sel = FREE_IMAGE_SITES[selectedSite] == site
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (sel) Color(0xFF4C1D95) else Color(0xFF1E293B),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (sel) Color(0xFFA78BFA) else Color(0xFF334155)
+                                    ),
+                                    modifier = Modifier
+                                        .clickable { selectedSite = FREE_IMAGE_SITES.indexOf(site) }
+                                        .testTag("free_site_${site.id}")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Public,
+                                            contentDescription = null,
+                                            tint = Color(0xFFA78BFA),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(text = site.titleAr, color = Color.White, fontSize = 11.sp)
+                                        if (sel) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFA78BFA), modifier = Modifier.size(13.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = FREE_IMAGE_SITES[selectedSite].noteAr,
+                                color = Color(0xFFF59E0B),
+                                fontSize = 11.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = { webViewRef[0]?.reload() },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("reload_free_site_button")
+                            ) {
+                                Text("تحديث ⟳", fontSize = 11.sp)
+                            }
+                        }
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                            settings.setSupportZoom(true)
+                                            settings.builtInZoomControls = true
+                                            settings.displayZoomControls = false
+                                    webViewClient = WebViewClient()
+                                    // Upload support: a site's "upload image" button
+                                    // opens the gallery and hands the photo to the page.
+                                    webChromeClient = object : WebChromeClient() {
+                                        override fun onShowFileChooser(
+                                            view: WebView?,
+                                            filePathCallback: ValueCallback<Array<Uri>>,
+                                            fileChooserParams: FileChooserParams
+                                        ): Boolean {
+                                            webFileChooserCallback?.onReceiveValue(null)
+                                            webFileChooserCallback = filePathCallback
+                                            webFilePicker.launch("image/*")
+                                            return true
+                                        }
+                                    }
+                                    val startUrl = FREE_IMAGE_SITES[selectedSite].url
+                                    loadUrl(startUrl)
+                                    webViewLoadedUrl[0] = startUrl
+                                            webViewRef[0] = this
+                                }
+                            },
+                            update = { webView ->
+                                val url = FREE_IMAGE_SITES[selectedSite].url
+                                if (webViewLoadedUrl[0] != url) {
+                                    webView.loadUrl(url)
+                                    webViewLoadedUrl[0] = url
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .testTag("free_image_site_webview")
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        when (tab) {
                         0 -> {
                             // ===== IMAGE TAB =====
                             item {
@@ -793,6 +933,50 @@ fun KitchenMediaDialog(
                                     Text(text = videoStatus!!, color = Color(0xFFCBD5E1), fontSize = 11.sp)
                                 }
                             }
+                            // v1.11: polling progress + resume/retry controls.
+                            if (videoBusy && videoProjectId != null) {
+                                item {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        LinearProgressIndicator(
+                                            progress = { (videoPollAttempts / 60f).coerceIn(0f, 1f) },
+                                            color = Color(0xFFEC4899),
+                                            trackColor = Color(0xFF1E293B),
+                                            modifier = Modifier.fillMaxWidth().height(6.dp)
+                                        )
+                                        Text(
+                                            text = "أتحقق من حالة الفيديو… ($videoPollAttempts من 60) — عادة يجهز خلال دقيقة.",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
+                            }
+                            if (!videoBusy && videoFile == null && videoProjectId != null) {
+                                item {
+                                    OutlinedButton(
+                                        onClick = { videoPollNonce++ },
+                                        modifier = Modifier.fillMaxWidth().testTag("resume_kitchen_video_poll_button")
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("متابعة حالة المشروع (دون إعادة الرفع)", fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                            if (!videoBusy && videoFile == null && videoProjectId == null &&
+                                (videoStatus?.contains("تعذر") == true || videoStatus?.contains("فشل") == true)
+                            ) {
+                                item {
+                                    OutlinedButton(
+                                        onClick = { startVideo() },
+                                        modifier = Modifier.fillMaxWidth().testTag("retry_kitchen_video_button")
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("إعادة المحاولة", fontSize = 11.sp)
+                                    }
+                                }
+                            }
                             if (videoFile != null) {
                                 item {
                                     AndroidView(
@@ -850,121 +1034,8 @@ fun KitchenMediaDialog(
                                 }
                             }
                         }
-                        2 -> {
-                            // ===== FREE SITES TAB =====
-                            item {
-                                Text(
-                                    text = "مواقع توليد الصور المجانية من لقطتك — افتح أياً منها، وسجّل دخولك إن طلب، ثم الصق الوصف المنسوخ من زر النسخ بالأسفل.",
-                                    color = Color(0xFFCBD5E1),
-                                    fontSize = 11.sp
-                                )
-                            }
-                            item {
-                                OutlinedButton(
-                                    onClick = {
-                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        cm.setPrimaryClip(ClipData.newPlainText("kitchen prompt", promptText))
-                                        promptCopied = true
-                                    },
-                                    modifier = Modifier.fillMaxWidth().testTag("copy_media_prompt_button")
-                                ) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        if (promptCopied) "تم نسخ الوصف ✓ — الصقه في الموقع" else "📋 نسخ وصف الصورة",
-                                        fontSize = 12.sp
-                                    )
-                                }
-                            }
-                            item {
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    items(FREE_IMAGE_SITES) { site ->
-                                        val sel = FREE_IMAGE_SITES[selectedSite] == site
-                                        Surface(
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = if (sel) Color(0xFF4C1D95) else Color(0xFF1E293B),
-                                            border = androidx.compose.foundation.BorderStroke(
-                                                1.dp,
-                                                if (sel) Color(0xFFA78BFA) else Color(0xFF334155)
-                                            ),
-                                            modifier = Modifier
-                                                .clickable { selectedSite = FREE_IMAGE_SITES.indexOf(site) }
-                                                .testTag("free_site_${site.id}")
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Public,
-                                                    contentDescription = null,
-                                                    tint = Color(0xFFA78BFA),
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(text = site.titleAr, color = Color.White, fontSize = 11.sp)
-                                                if (sel) {
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFA78BFA), modifier = Modifier.size(13.dp))
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            item {
-                                Text(
-                                    text = FREE_IMAGE_SITES[selectedSite].noteAr,
-                                    color = Color(0xFFF59E0B),
-                                    fontSize = 11.sp
-                                )
-                            }
-                            item {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        WebView(ctx).apply {
-                                            layoutParams = ViewGroup.LayoutParams(
-                                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                                ViewGroup.LayoutParams.MATCH_PARENT
-                                            )
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            webViewClient = WebViewClient()
-                                            // Upload support: a site's "upload image" button
-                                            // opens the gallery and hands the photo to the page.
-                                            webChromeClient = object : WebChromeClient() {
-                                                override fun onShowFileChooser(
-                                                    view: WebView?,
-                                                    filePathCallback: ValueCallback<Array<Uri>>,
-                                                    fileChooserParams: FileChooserParams
-                                                ): Boolean {
-                                                    webFileChooserCallback?.onReceiveValue(null)
-                                                    webFileChooserCallback = filePathCallback
-                                                    webFilePicker.launch("image/*")
-                                                    return true
-                                                }
-                                            }
-                                            val startUrl = FREE_IMAGE_SITES[selectedSite].url
-                                            loadUrl(startUrl)
-                                            webViewLoadedUrl[0] = startUrl
-                                        }
-                                    },
-                                    update = { webView ->
-                                        val url = FREE_IMAGE_SITES[selectedSite].url
-                                        if (webViewLoadedUrl[0] != url) {
-                                            webView.loadUrl(url)
-                                            webViewLoadedUrl[0] = url
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(480.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .testTag("free_image_site_webview")
-                                )
-                            }
-                        }
                     }
+                }
                 }
             }
         }
