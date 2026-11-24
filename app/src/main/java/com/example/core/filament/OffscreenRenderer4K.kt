@@ -351,7 +351,7 @@ object OffscreenRenderer4K {
                                     currentTile = done,
                                     totalTiles = totalTiles,
                                     timeElapsedMs = elapsed,
-                                    estimatedRemainingMs = estimatedRemaining,
+                                    estimatedTimeRemainingMs = estimatedRemaining,
                                     stageDescription = "تتبع الأشعة الفيزيائي PBR: البلاطة $done من $totalTiles (${resolutionPreset.width}×${resolutionPreset.height})"
                                 )
                             )

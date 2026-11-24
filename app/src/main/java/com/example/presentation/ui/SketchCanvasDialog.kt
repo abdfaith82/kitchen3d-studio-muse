@@ -35,7 +35,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -443,7 +443,7 @@ fun SketchCanvasDialog(
                     // Left/Main: Realistic Architectural Blueprint Sketch Pad
                     Box(
                         modifier = paneModifier
-                            .onSizeChanged { canvasSize = Offset(it.width.toFloat(), it.height.toFloat()) }
+                            .onGloballyPositioned { coords -> canvasSize = Offset(coords.size.width.toFloat(), coords.size.height.toFloat()) }
                             .background(Color(0xFF040D1A), RoundedCornerShape(14.dp))
                             .border(1.dp, Color(0xFF1E3A5F), RoundedCornerShape(14.dp))
                             .pointerInput(canvasSize) {
