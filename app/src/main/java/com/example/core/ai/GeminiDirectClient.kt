@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  * so generation tries a fallback chain and only treats 404 as "try the next
  * model". Snapshot of the chain, Nov 2026: 2.5-flash, 3.5-flash, 3.8-flash.
  */
-enum class GeminiDirectFailure {
+enum class AiDirectFailure {
     INVALID_KEY,
     QUOTA_EXCEEDED,
     MODEL_UNAVAILABLE,
@@ -37,9 +37,9 @@ enum class GeminiDirectFailure {
     SERVER_ERROR
 }
 
-sealed interface GeminiDirectResult {
-    data class Success(val jsonText: String) : GeminiDirectResult
-    data class Failure(val kind: GeminiDirectFailure, val detail: String? = null) : GeminiDirectResult
+sealed interface AiDirectResult {
+    data class Success(val jsonText: String) : AiDirectResult
+    data class Failure(val kind: AiDirectFailure, val detail: String? = null) : AiDirectResult
 }
 
 object GeminiDirectClient {
@@ -57,7 +57,7 @@ object GeminiDirectClient {
             .build()
     }
 
-    suspend fun generateJson(prompt: String, apiKey: String): GeminiDirectResult =
+    suspend fun generateJson(prompt: String, apiKey: String): AiDirectResult =
         withContext(Dispatchers.IO) {
             val requestBody = JSONObject().apply {
                 put(
@@ -92,26 +92,26 @@ object GeminiDirectClient {
                                 val content = extractResponseText(bodyText)
                                     ?.let(::extractJsonObject)
                                 return@withContext if (content.isNullOrBlank()) {
-                                    GeminiDirectResult.Failure(GeminiDirectFailure.EMPTY_RESPONSE)
+                                    AiDirectResult.Failure(AiDirectFailure.EMPTY_RESPONSE)
                                 } else {
-                                    GeminiDirectResult.Success(content)
+                                    AiDirectResult.Success(content)
                                 }
                             }
                             response.code == 404 -> {
                                 // Model retired/renamed — try the next one.
                             }
                             response.code == 400 || response.code == 401 || response.code == 403 ->
-                                return@withContext GeminiDirectResult.Failure(
-                                    GeminiDirectFailure.INVALID_KEY,
+                                return@withContext AiDirectResult.Failure(
+                                    AiDirectFailure.INVALID_KEY,
                                     response.code.toString()
                                 )
                             response.code == 429 ->
-                                return@withContext GeminiDirectResult.Failure(
-                                    GeminiDirectFailure.QUOTA_EXCEEDED
+                                return@withContext AiDirectResult.Failure(
+                                    AiDirectFailure.QUOTA_EXCEEDED
                                 )
                             else ->
-                                return@withContext GeminiDirectResult.Failure(
-                                    GeminiDirectFailure.SERVER_ERROR,
+                                return@withContext AiDirectResult.Failure(
+                                    AiDirectFailure.SERVER_ERROR,
                                     response.code.toString()
                                 )
                         }
@@ -119,12 +119,12 @@ object GeminiDirectClient {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: SocketTimeoutException) {
-                    return@withContext GeminiDirectResult.Failure(GeminiDirectFailure.TIMEOUT)
+                    return@withContext AiDirectResult.Failure(AiDirectFailure.TIMEOUT)
                 } catch (_: IOException) {
-                    return@withContext GeminiDirectResult.Failure(GeminiDirectFailure.NETWORK)
+                    return@withContext AiDirectResult.Failure(AiDirectFailure.NETWORK)
                 }
             }
-            GeminiDirectResult.Failure(GeminiDirectFailure.MODEL_UNAVAILABLE)
+            AiDirectResult.Failure(AiDirectFailure.MODEL_UNAVAILABLE)
         }
 
     /** `candidates[0].content.parts[0].text` — null when the shape is unexpected. */

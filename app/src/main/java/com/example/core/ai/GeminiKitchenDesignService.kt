@@ -107,7 +107,12 @@ sealed interface AiDesignUiState {
  * failed with "Default FirebaseApp is not initialized" — the exact red error
  * in the user's video. It now calls the Gemini REST API directly with the
  * user's free key from Google AI Studio (stored encrypted via
- * [GeminiApiKeyStore]); no Firebase project, no account, no card.
+ * [AiApiKeyStore]); no Firebase project, no account, no card.
+ *
+ * v1.8 — Groq joined as a second provider ([AiProvider.GROQ],
+ * [GroqDirectClient]): same prompt, same JSON parser, different transport.
+ * The caller picks the provider; a blank key for that provider returns an
+ * Arabic guide naming where its free key comes from.
  *
  * The prompt and the JSON parser are unchanged from the Firebase version —
  * only the transport changed. The response is requested as raw JSON
@@ -124,7 +129,8 @@ class GeminiKitchenDesignService {
         stylePreference: KitchenAiStylePreference,
         includeIsland: Boolean,
         customNotes: String,
-        apiKey: String
+        apiKey: String,
+        provider: AiProvider = AiProvider.GEMINI
     ): AiDesignUiState {
         val safeW = roomWidthMm.coerceIn(2400f, 8000f).toInt()
         val safeD = roomDepthMm.coerceIn(2200f, 8000f).toInt()
@@ -134,7 +140,7 @@ class GeminiKitchenDesignService {
         // surfacing a raw English exception (the old Firebase error).
         if (apiKey.isBlank()) {
             return AiDesignUiState.Error(
-                "التوليد يحتاج مفتاح Gemini مجاني: افتح Google AI Studio من متصفح هاتفك (aistudio.google.com) ← Get API key ← أنشئ مفتاحاً والصقه في حقل المفتاح أعلى هذه النافذة، ثم اضغط توليد."
+                "التوليد عبر ${provider.arabicTitle} يحتاج مفتاحاً مجانياً: ${provider.keySourceAr} ثم اضغط توليد."
             )
         }
 
@@ -163,13 +169,16 @@ class GeminiKitchenDesignService {
 
         return try {
             val result = withTimeout(60_000L) {
-                GeminiDirectClient.generateJson(prompt, apiKey.trim())
+                when (provider) {
+                    AiProvider.GEMINI -> GeminiDirectClient.generateJson(prompt, apiKey.trim())
+                    AiProvider.GROQ -> GroqDirectClient.generateJson(prompt, apiKey.trim())
+                }
             }
             when (result) {
-                is GeminiDirectResult.Failure -> mapFailureToError(result)
-                is GeminiDirectResult.Success -> {
+                is AiDirectResult.Failure -> mapFailureToError(result, provider)
+                is AiDirectResult.Success -> {
                     if (result.jsonText.isBlank()) {
-                        AiDesignUiState.Error("أرجع نموذج Gemini استجابة فارغة. يرجى المحاولة مرة أخرى.")
+                        AiDesignUiState.Error("أرجع النموذج استجابة فارغة. يرجى المحاولة مرة أخرى.")
                     } else {
                         parseStructuredKitchenResponse(
                             jsonString = result.jsonText,
@@ -194,21 +203,21 @@ class GeminiKitchenDesignService {
     }
 
     /** Every failure the user can see is Arabic — never a raw English exception. */
-    private fun mapFailureToError(failure: GeminiDirectResult.Failure): AiDesignUiState.Error {
+    private fun mapFailureToError(failure: AiDirectResult.Failure, provider: AiProvider): AiDesignUiState.Error {
         val message = when (failure.kind) {
-            GeminiDirectFailure.INVALID_KEY ->
-                "المفتاح غير صحيح أو غير مفعّل. تأكد من نسخه كاملاً من Google AI Studio (aistudio.google.com) والصقه مجدداً."
-            GeminiDirectFailure.QUOTA_EXCEEDED ->
+            AiDirectFailure.INVALID_KEY ->
+                "المفتاح غير صحيح أو غير مفعّل. تأكد من نسخه كاملاً من ${provider.keySourceShort} والصقه مجدداً."
+            AiDirectFailure.QUOTA_EXCEEDED ->
                 "انتهت حصة المفتاح المجاني لهذه الدقيقة/اليوم. انتظر قليلاً ثم حاول مجدداً."
-            GeminiDirectFailure.MODEL_UNAVAILABLE ->
+            AiDirectFailure.MODEL_UNAVAILABLE ->
                 "نماذج Gemini المجانية غير متاحة حالياً. حاول مجدداً بعد قليل."
-            GeminiDirectFailure.NETWORK ->
+            AiDirectFailure.NETWORK ->
                 "تعذّر الاتصال بالإنترنت. تحقق من الاتصال ثم حاول مجدداً."
-            GeminiDirectFailure.TIMEOUT ->
+            AiDirectFailure.TIMEOUT ->
                 "انتهت مهلة توليد التصميم عبر الذكاء الاصطناعي (60 ثانية). يرجى المحاولة مجدداً."
-            GeminiDirectFailure.EMPTY_RESPONSE ->
-                "أرجع نموذج Gemini استجابة فارغة. يرجى المحاولة مرة أخرى."
-            GeminiDirectFailure.SERVER_ERROR ->
+            AiDirectFailure.EMPTY_RESPONSE ->
+                "أرجع النموذج استجابة فارغة. يرجى المحاولة مرة أخرى."
+            AiDirectFailure.SERVER_ERROR ->
                 "تعذّر توليد التصميم حالياً (خطأ من الخدمة). حاول مجدداً."
         }
         return AiDesignUiState.Error(message)

@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.core.ai.AiDesignUiState
+import com.example.core.ai.AiProvider
 import com.example.core.ai.KitchenAiStylePreference
 import com.example.core.units.MeasurementUnitSystem
 import com.example.domain.model.RoomLayoutShape
@@ -42,9 +43,12 @@ fun GeminiKitchenDesignDialog(
     currentRoom: RoomStructure,
     unitSystem: MeasurementUnitSystem,
     aiState: AiDesignUiState,
-    hasApiKey: Boolean,
-    onSaveApiKey: (String) -> Unit,
-    onClearApiKey: () -> Unit,
+    aiProvider: AiProvider,
+    hasGeminiApiKey: Boolean,
+    hasGroqApiKey: Boolean,
+    onSelectProvider: (AiProvider) -> Unit,
+    onSaveApiKey: (AiProvider, String) -> Unit,
+    onClearApiKey: (AiProvider) -> Unit,
     onGenerateDesign: (
         widthMm: Float,
         depthMm: Float,
@@ -64,9 +68,10 @@ fun GeminiKitchenDesignDialog(
     var selectedStyle by remember { mutableStateOf(KitchenAiStylePreference.ROYAL_OAK_AND_CHARCOAL) }
     var includeIsland by remember { mutableStateOf(currentRoom.widthMm >= 4200f && currentRoom.depthMm >= 3600f) }
     var customNotes by remember { mutableStateOf("") }
-    // v1.7 — free Gemini key (Google AI Studio), encrypted on-device.
-    var apiKeyInput by remember { mutableStateOf("") }
-    var showKeyField by remember(hasApiKey) { mutableStateOf(!hasApiKey) }
+    // v1.7/v1.8 — free provider key (Gemini or Groq), encrypted on-device.
+    var apiKeyInput by remember(aiProvider) { mutableStateOf("") }
+    val hasApiKey = if (aiProvider == AiProvider.GEMINI) hasGeminiApiKey else hasGroqApiKey
+    var showKeyField by remember(aiProvider, hasApiKey) { mutableStateOf(!hasApiKey) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -115,13 +120,13 @@ fun GeminiKitchenDesignDialog(
                         }
                         Column {
                             Text(
-                                text = "مهندس المطابخ الذكي بـ Gemini AI",
+                                text = "مهندس المطابخ الذكي بالذكاء الاصطناعي",
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 15.sp,
                                 color = Color.White
                             )
                             Text(
-                                text = "اقتراح تصميم مطبخ متكامل ثلاثي الأبعاد حسب أبعاد غرفتك والنمط المفضل",
+                                text = "Gemini أو Groq — تصميم مطبخ متكامل ثلاثي الأبعاد حسب أبعاد غرفتك والنمط المفضل",
                                 fontSize = 11.sp,
                                 color = Color(0xFFA78BFA)
                             )
@@ -132,9 +137,65 @@ fun GeminiKitchenDesignDialog(
                     }
                 }
 
-                // 0. Free Gemini API key — v1.7: the old Firebase path could never
-                // work (no google-services.json in the repo), so generation now
-                // calls the Gemini REST API directly with the user's own free key.
+                // 0. Provider choice (v1.8) — Gemini or Groq, both free keys.
+                Text(
+                    text = "اختر مزود الذكاء الاصطناعي (كلاهما مجاني، بلا بطاقة):",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = Color(0xFFC4B5FD)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AiProvider.entries.forEach { provider ->
+                        val isSel = aiProvider == provider
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSel) Color(0xFF4C1D95).copy(alpha = 0.45f) else Color(0xFF1E293B),
+                            border = BorderStroke(
+                                width = if (isSel) 1.5.dp else 1.dp,
+                                color = if (isSel) Color(0xFFA78BFA) else Color(0xFF334155)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onSelectProvider(provider) }
+                                .testTag("ai_provider_${provider.id}_chip")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = provider.arabicTitle,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                    if (isSel) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "محدد",
+                                            tint = Color(0xFFA78BFA),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = provider.subtitleAr,
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 0.5 Free API key for the selected provider — encrypted on-device.
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = if (hasApiKey) Color(0xFF064E3B).copy(alpha = 0.4f) else Color(0xFF451A03).copy(alpha = 0.45f),
@@ -142,20 +203,20 @@ fun GeminiKitchenDesignDialog(
                         1.dp,
                         if (hasApiKey) Color(0xFF10B981) else Color(0xFFF59E0B)
                     ),
-                    modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_card")
+                    modifier = Modifier.fillMaxWidth().testTag("ai_provider_key_card")
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = if (hasApiKey) "🔑 مفتاح Gemini محفوظ ✓" else "🔑 مفتاح Gemini المجاني (مطلوب ليعمل التوليد)",
+                            text = if (hasApiKey) "🔑 مفتاح ${aiProvider.arabicTitle} محفوظ ✓" else "🔑 مفتاح ${aiProvider.arabicTitle} المجاني (مطلوب ليعمل التوليد)",
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
                             color = Color.White
                         )
                         Text(
-                            text = "مفتاح مجاني من Google AI Studio: افتح aistudio.google.com من متصفح هاتفك ← Get API key ← أنشئ مفتاحاً والصقه هنا. يُحفظ مشفّراً على جهازك فقط، ولا يُرسل إلا إلى Google.",
+                            text = aiProvider.keySourceAr + " يُحفظ مشفّراً على جهازك فقط، ولا يُرسل إلا إلى ${aiProvider.arabicTitle}.",
                             fontSize = 10.sp,
                             color = Color(0xFFCBD5E1)
                         )
@@ -166,33 +227,33 @@ fun GeminiKitchenDesignDialog(
                             ) {
                                 OutlinedButton(
                                     onClick = { showKeyField = true },
-                                    modifier = Modifier.weight(1f).testTag("change_gemini_key_button")
+                                    modifier = Modifier.weight(1f).testTag("change_ai_provider_key_button")
                                 ) { Text("تغيير المفتاح", fontSize = 11.sp) }
                                 OutlinedButton(
-                                    onClick = onClearApiKey,
-                                    modifier = Modifier.weight(1f).testTag("clear_gemini_key_button")
+                                    onClick = { onClearApiKey(aiProvider) },
+                                    modifier = Modifier.weight(1f).testTag("clear_ai_provider_key_button")
                                 ) { Text("مسح المفتاح", fontSize = 11.sp) }
                             }
                         } else {
                             OutlinedTextField(
                                 value = apiKeyInput,
                                 onValueChange = { apiKeyInput = it.trim() },
-                                label = { Text("الصق مفتاح Gemini هنا", fontSize = 11.sp) },
+                                label = { Text("الصق مفتاح ${aiProvider.arabicTitle} هنا", fontSize = 11.sp) },
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation(),
-                                modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_input")
+                                modifier = Modifier.fillMaxWidth().testTag("ai_provider_key_input")
                             )
                             Button(
                                 onClick = {
                                     if (apiKeyInput.isNotBlank()) {
-                                        onSaveApiKey(apiKeyInput)
+                                        onSaveApiKey(aiProvider, apiKeyInput)
                                         apiKeyInput = ""
                                         showKeyField = false
                                     }
                                 },
                                 enabled = apiKeyInput.isNotBlank(),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
-                                modifier = Modifier.fillMaxWidth().testTag("save_gemini_key_button")
+                                modifier = Modifier.fillMaxWidth().testTag("save_ai_provider_key_button")
                             ) {
                                 Text("حفظ المفتاح", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
@@ -380,7 +441,7 @@ fun GeminiKitchenDesignDialog(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("جاري هندسة المطبخ عبر Gemini...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("جاري هندسة المطبخ عبر ${aiProvider.arabicTitle}...", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     } else {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
@@ -389,7 +450,7 @@ fun GeminiKitchenDesignDialog(
                 }
                 if (!hasApiKey) {
                     Text(
-                        text = "⚠️ أدخل مفتاح Gemini المجاني أعلاه أولاً — زر التوليد يعمل بعد حفظ المفتاح.",
+                        text = "⚠️ أدخل مفتاح ${aiProvider.arabicTitle} المجاني أعلاه أولاً — زر التوليد يعمل بعد حفظ المفتاح.",
                         fontSize = 11.sp,
                         color = Color(0xFFFBBF24),
                         modifier = Modifier.fillMaxWidth()

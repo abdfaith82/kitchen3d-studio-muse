@@ -1522,9 +1522,12 @@ fun KitchenStudioScreen(
                 currentRoom = state.project.room,
                 unitSystem = state.unitSystem,
                 aiState = state.aiDesignState,
-                hasApiKey = state.hasGeminiApiKey,
-                onSaveApiKey = { viewModel.saveGeminiApiKey(it) },
-                onClearApiKey = { viewModel.clearGeminiApiKey() },
+                aiProvider = state.aiProvider,
+                hasGeminiApiKey = state.hasGeminiApiKey,
+                hasGroqApiKey = state.hasGroqApiKey,
+                onSelectProvider = { viewModel.setAiProvider(it) },
+                onSaveApiKey = { provider, key -> viewModel.saveAiApiKey(provider, key) },
+                onClearApiKey = { provider -> viewModel.clearAiApiKey(provider) },
                 onGenerateDesign = { w, d, h, shape, style, island, notes ->
                     viewModel.generateGeminiKitchenDesign(
                         roomWidthMm = w,
