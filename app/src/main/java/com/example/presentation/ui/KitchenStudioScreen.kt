@@ -560,6 +560,12 @@ fun KitchenStudioScreen(
                         onClick = { viewModel.openDialog(ActiveDialog.GeminiAiDesigner) }
                     )
                     BottomStudioAction(
+                        icon = Icons.Default.Movie,
+                        label = "صور وفيديو",
+                        tag = "btn_open_kitchen_media",
+                        onClick = { viewModel.openDialog(ActiveDialog.KitchenMedia) }
+                    )
+                    BottomStudioAction(
                         icon = Icons.Default.Build,
                         label = "إكسسوارات ذكية",
                         tag = "btn_open_smart_accessories",
@@ -1542,6 +1548,12 @@ fun KitchenStudioScreen(
                 onApplyGeneratedProject = { generatedProject ->
                     viewModel.applyImportedProject(generatedProject)
                 },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        is ActiveDialog.KitchenMedia -> {
+            KitchenMediaDialog(
+                currentRoom = state.project.room,
                 onDismiss = { viewModel.openDialog(null) }
             )
         }

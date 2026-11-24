@@ -98,6 +98,7 @@ sealed class ActiveDialog {
     data object ProjectsManager : ActiveDialog()
     data object CabinetFillerTool : ActiveDialog()
     data object GeminiAiDesigner : ActiveDialog()
+    data object KitchenMedia : ActiveDialog()
     data object SmartAccessories : ActiveDialog()
     data object PhotoCabinetDesigner : ActiveDialog()
 }

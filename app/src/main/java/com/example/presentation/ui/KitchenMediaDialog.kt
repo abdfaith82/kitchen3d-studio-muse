@@ -1,0 +1,806 @@
+package com.example.presentation.ui
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.provider.MediaStore
+import android.view.ViewGroup
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.VideoView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.example.core.ai.KitchenAiStylePreference
+import com.example.core.media.KitchenVisualPrompt
+import com.example.core.media.MagicHourClient
+import com.example.core.media.MagicHourKeyStore
+import com.example.core.media.PollinationsImageClient
+import com.example.domain.model.RoomStructure
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private data class FreeImageSite(
+    val id: String,
+    val titleAr: String,
+    val url: String,
+    val noteAr: String
+)
+
+/**
+ * The four free image models from the user's screenshot (verified
+ * 2026-11-24 in the sibling app — the screenshot's own claims were partly
+ * wrong: Hailuo has no daily credit and Pika's free plan is 0 credits, so
+ * they are NOT listed here; only the four verified sites are).
+ */
+private val FREE_IMAGE_SITES = listOf(
+    FreeImageSite(
+        id = "raphael",
+        titleAr = "Raphael AI",
+        url = "https://raphael.app",
+        noteAr = "بلا حدود على النموذج الأساسي وبلا تسجيل — لكن الصور المجانية بعلامة مائية وللاستخدام غير التجاري فقط."
+    ),
+    FreeImageSite(
+        id = "leonardo",
+        titleAr = "Leonardo.ai",
+        url = "https://leonardo.ai",
+        noteAr = "150 نقطة مجانية كل يوم تتجدد (نحو 18 صورة يومياً)، بلا علامة مائية — لكن الصور الناتجة عامة."
+    ),
+    FreeImageSite(
+        id = "bingimage",
+        titleAr = "Bing Image Creator",
+        url = "https://www.bing.com/images/create",
+        noteAr = "من مايكروسوفت — 15 إنشاءً سريعاً كل يوم بحساب شخصي، ثم سرعة عادية حتى 200 موجّه يومياً، بلا علامة مائية."
+    ),
+    FreeImageSite(
+        id = "metaai",
+        titleAr = "Meta AI",
+        url = "https://meta.ai",
+        noteAr = "من ميتا — صور بلا حدود تقريباً مجاناً وبدون علامة مائية، لكن تحتاج تسجيل دخول بحساب فيسبوك أو إنستغرام."
+    )
+)
+
+/**
+ * v1.9 — Kitchen Media: the same chain the user asked for in the sibling
+ * app, adapted to this kitchen: text → image → video.
+ *  1) 📝 نص: an English visual prompt is built automatically from the
+ *     current room (dims, layout, style, island) — editable.
+ *  2) 🖼️ صورة: Pollinations generates a photorealistic render keylessly
+ *     (flux, 1024×576), shown in-app and saved to the gallery.
+ *  3) 🎬 فيديو: Magic Hour animates that image (free key, encrypted on
+ *     device) into a 5s clip, played in-app and saved to the gallery.
+ *  4) 🌐 مواقع: the four verified free image sites from the screenshot
+ *     open in WebView tabs, with a one-tap "copy prompt" button.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun KitchenMediaDialog(
+    currentRoom: RoomStructure,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tab by remember { mutableIntStateOf(0) }
+    val tabs = listOf("🖼️ صورة واقعية", "🎬 فيديو متحرك", "🌐 مواقع مجانية")
+
+    // --- Shared chain state: the prompt and the generated image ---
+    var style by remember { mutableStateOf(KitchenAiStylePreference.ROYAL_OAK_AND_CHARCOAL) }
+    var includeIsland by remember { mutableStateOf(false) }
+    var promptText by remember {
+        mutableStateOf(
+            KitchenVisualPrompt.buildKitchenImagePrompt(currentRoom, style, includeIsland)
+        )
+    }
+    fun rebuildPrompt() {
+        promptText = KitchenVisualPrompt.buildKitchenImagePrompt(currentRoom, style, includeIsland)
+    }
+
+    var imageFile by remember { mutableStateOf<File?>(null) }
+    var imageBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var imageLoading by remember { mutableStateOf(false) }
+    var imageStatus by remember { mutableStateOf<String?>(null) }
+    var imageSaved by remember { mutableStateOf(false) }
+
+    fun generateImage() {
+        if (promptText.isBlank()) {
+            imageStatus = "اكتب الوصف أولاً."
+            return
+        }
+        imageLoading = true
+        imageStatus = "جاري توليد الصورة الواقعية (بلا مفتاح)..."
+        scope.launch {
+            val result = PollinationsImageClient.generateImage(
+                prompt = promptText,
+                cacheDir = context.cacheDir
+            )
+            imageLoading = false
+            result.onSuccess { file ->
+                imageFile = file
+                imageSaved = false
+                imageBitmap = BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+                imageStatus = "تم توليد الصورة ✓ — يمكنك حفظها أو تحريكها كفيديو من التبويب التالي."
+            }.onFailure { err ->
+                imageStatus = "تعذر توليد الصورة (${err.message ?: "خطأ شبكة"}) — الخدمة المجانية قد تكون بطيئة؛ جرّب مرة أخرى أو استخدم تبويب المواقع المجانية."
+            }
+        }
+    }
+
+    // --- Video state (Magic Hour) ---
+    var hasMagicHourKey by remember { mutableStateOf(MagicHourKeyStore.hasApiKey(context)) }
+    var magicHourKeyInput by remember { mutableStateOf("") }
+    var showMagicHourKeyField by remember(hasMagicHourKey) { mutableStateOf(!hasMagicHourKey) }
+    var videoModel by remember { mutableStateOf(MagicHourClient.FREE_MODELS.first()) }
+    var videoBusy by remember { mutableStateOf(false) }
+    var videoStatus by remember { mutableStateOf<String?>(null) }
+    var videoProjectId by remember { mutableStateOf<String?>(null) }
+    var videoFile by remember { mutableStateOf<File?>(null) }
+
+    LaunchedEffect(videoProjectId) {
+        val id = videoProjectId ?: return@LaunchedEffect
+        val key = MagicHourKeyStore.loadApiKey(context) ?: return@LaunchedEffect
+        var attempts = 0
+        while (attempts < 60) {
+            delay(5000)
+            attempts++
+            val res = MagicHourClient.projectStatus(id, key)
+            res.onSuccess { (status, url) ->
+                videoStatus = "حالة الفيديو: $status (تحقق $attempts)"
+                when (status) {
+                    "complete" -> {
+                        if (url != null) {
+                            val target = File(context.cacheDir, "kitchen-video-${System.currentTimeMillis()}.mp4")
+                            MagicHourClient.downloadUrl(url, target).onSuccess { file ->
+                                videoFile = file
+                                videoBusy = false
+                                videoStatus = "اكتمل الفيديو ✓ — شغّله بالأسفل أو احفظه في المعرض."
+                            }.onFailure {
+                                videoBusy = false
+                                videoStatus = "اكتمل الفيديو لكن تعذر تنزيله — جرّب مرة أخرى."
+                            }
+                        } else {
+                            videoBusy = false
+                            videoStatus = "اكتمل الفيديو لكن بلا رابط تنزيل."
+                        }
+                        return@LaunchedEffect
+                    }
+                    "error", "canceled" -> {
+                        videoBusy = false
+                        videoStatus = "فشل توليد الفيديو ($status) — جرّب نموذجاً آخر أو أعد المحاولة."
+                        return@LaunchedEffect
+                    }
+                }
+            }.onFailure { err ->
+                videoStatus = "تعذر التحقق من الحالة: ${err.message}"
+            }
+        }
+        videoBusy = false
+        videoStatus = "انتهت مهلة الانتظار (5 دقائق) — الفيديو قد يكتمل لاحقاً؛ أعد فتح النافذة والمحاولة."
+    }
+
+    fun startVideo() {
+        val file = imageFile
+        if (file == null) {
+            videoStatus = "ولّد صورة أولاً من تبويب «صورة واقعية»."
+            return
+        }
+        val key = MagicHourKeyStore.loadApiKey(context)
+        if (key.isNullOrBlank()) {
+            videoStatus = "احفظ مفتاح Magic Hour المجاني أولاً (من magichour.ai)."
+            return
+        }
+        videoBusy = true
+        videoFile = null
+        videoStatus = "جاري رفع الصورة وتحويلها إلى فيديو..."
+        scope.launch {
+            val uploaded = MagicHourClient.uploadImage(file, key)
+            uploaded.onFailure { err ->
+                videoBusy = false
+                videoStatus = "تعذر رفع الصورة: ${err.message}"
+                return@launch
+            }
+            val submitted = MagicHourClient.submitImageToVideo(
+                prompt = promptText,
+                model = videoModel,
+                durationSec = 5,
+                imageFilePath = uploaded.getOrNull() ?: "",
+                key = key
+            )
+            submitted.onSuccess { id ->
+                videoProjectId = id
+                videoStatus = "بدأ توليد الفيديو — سأتحقق من حالته كل 5 ثوانٍ..."
+            }.onFailure { err ->
+                videoBusy = false
+                videoStatus = "تعذر بدء الفيديو: ${err.message}"
+            }
+        }
+    }
+
+    // --- Free sites tab state ---
+    var selectedSite by remember { mutableIntStateOf(0) }
+    var promptCopied by remember { mutableStateOf(false) }
+    // Plain holder (not State): which site URL the WebView already loaded.
+    // Reading webView.url would reload the site home whenever the user
+    // navigates inside it, so the loaded URL is tracked separately.
+    val webViewLoadedUrl = remember { arrayOf<String?>(null) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.94f),
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF0F172A)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "صور وفيديو المطبخ 🎨🎬",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 16.sp,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "السلسلة: وصف نصي من مشروعك ← صورة واقعية ← فيديو متحرك",
+                            fontSize = 11.sp,
+                            color = Color(0xFFA78BFA)
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_kitchen_media_dialog")) {
+                        Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color.White)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                TabRow(
+                    selectedTabIndex = tab,
+                    containerColor = Color(0xFF1E293B),
+                    contentColor = Color.White
+                ) {
+                    tabs.forEachIndexed { i, title ->
+                        Tab(
+                            selected = tab == i,
+                            onClick = { tab = i },
+                            text = { Text(title, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                            modifier = Modifier.testTag("kitchen_media_tab_$i")
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    when (tab) {
+                        0 -> {
+                            // ===== IMAGE TAB =====
+                            item {
+                                Text(
+                                    text = "النمط (يُبنى منه الوصف تلقائياً):",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFC4B5FD)
+                                )
+                            }
+                            item {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(KitchenAiStylePreference.entries) { s ->
+                                        val sel = style == s
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (sel) Color(0xFF4C1D95) else Color(0xFF1E293B),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (sel) Color(0xFFA78BFA) else Color(0xFF334155)
+                                            ),
+                                            modifier = Modifier
+                                                .clickable {
+                                                    style = s
+                                                    rebuildPrompt()
+                                                }
+                                                .testTag("media_style_${s.id}")
+                                        ) {
+                                            Text(
+                                                text = s.arabicTitle,
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            item {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "جزيرة وسطية",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Switch(
+                                        checked = includeIsland,
+                                        onCheckedChange = {
+                                            includeIsland = it
+                                            rebuildPrompt()
+                                        },
+                                        modifier = Modifier.testTag("media_island_switch")
+                                    )
+                                    Text(
+                                        text = "أبعاد الغرفة: ${(currentRoom.widthMm / 1000f)}م × ${(currentRoom.depthMm / 1000f)}م",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            item {
+                                OutlinedTextField(
+                                    value = promptText,
+                                    onValueChange = { promptText = it },
+                                    label = { Text("الوصف الإنجليزي للصورة (قابل للتعديل)", fontSize = 11.sp) },
+                                    minLines = 3,
+                                    maxLines = 6,
+                                    modifier = Modifier.fillMaxWidth().testTag("media_prompt_input")
+                                )
+                            }
+                            item {
+                                Button(
+                                    onClick = { generateImage() },
+                                    enabled = !imageLoading,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                                    modifier = Modifier.fillMaxWidth().testTag("generate_kitchen_image_button")
+                                ) {
+                                    if (imageLoading) {
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    Text("🎨 توليد صورة واقعية (مجاني — بلا مفتاح)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                            if (imageStatus != null) {
+                                item {
+                                    Text(text = imageStatus!!, color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                                }
+                            }
+                            if (imageBitmap != null) {
+                                item {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = imageBitmap!!,
+                                        contentDescription = "صورة المطبخ المولدة",
+                                        contentScale = ContentScale.FillWidth,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .testTag("generated_kitchen_image")
+                                    )
+                                }
+                                item {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    val file = imageFile ?: return@launch
+                                                    imageSaved = saveFileToGallery(
+                                                        context = context,
+                                                        file = file,
+                                                        mimeType = "image/jpeg",
+                                                        folder = "Pictures/Kitchen3DStudio",
+                                                        isVideo = false
+                                                    )
+                                                    imageStatus = if (imageSaved) "تم الحفظ في المعرض ✓" else "تعذر الحفظ في المعرض."
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f).testTag("save_kitchen_image_button")
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("حفظ في المعرض", fontSize = 11.sp)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { generateImage() },
+                                            enabled = !imageLoading,
+                                            modifier = Modifier.weight(1f).testTag("regenerate_kitchen_image_button")
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("صورة أخرى", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        1 -> {
+                            // ===== VIDEO TAB =====
+                            item {
+                                Text(
+                                    text = "يُحرَّك الإطار المولّد من تبويب الصورة عبر Magic Hour — مفتاح مجاني بلا بطاقة، لكن الرصيد محدود (نحو 15 مقطعاً قصيراً إجمالاً).",
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (hasMagicHourKey) Color(0xFF064E3B).copy(alpha = 0.4f) else Color(0xFF451A03).copy(alpha = 0.45f),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (hasMagicHourKey) Color(0xFF10B981) else Color(0xFFF59E0B)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth().testTag("magichour_key_card")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (hasMagicHourKey) "🔑 مفتاح Magic Hour محفوظ ✓" else "🔑 مفتاح Magic Hour المجاني (مطلوب للفيديو)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "من magichour.ai ← سجّل مجاناً ← API Keys ← انسخ المفتاح. يُحفظ مشفّراً على جهازك فقط.",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFFCBD5E1)
+                                        )
+                                        if (hasMagicHourKey && !showMagicHourKeyField) {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                OutlinedButton(
+                                                    onClick = { showMagicHourKeyField = true },
+                                                    modifier = Modifier.weight(1f).testTag("change_magichour_key_button")
+                                                ) { Text("تغيير المفتاح", fontSize = 11.sp) }
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        MagicHourKeyStore.clearApiKey(context)
+                                                        hasMagicHourKey = false
+                                                        showMagicHourKeyField = true
+                                                    },
+                                                    modifier = Modifier.weight(1f).testTag("clear_magichour_key_button")
+                                                ) { Text("مسح المفتاح", fontSize = 11.sp) }
+                                            }
+                                        } else {
+                                            OutlinedTextField(
+                                                value = magicHourKeyInput,
+                                                onValueChange = { magicHourKeyInput = it.trim() },
+                                                label = { Text("الصق مفتاح Magic Hour هنا", fontSize = 11.sp) },
+                                                singleLine = true,
+                                                visualTransformation = PasswordVisualTransformation(),
+                                                modifier = Modifier.fillMaxWidth().testTag("magichour_key_input")
+                                            )
+                                            Button(
+                                                onClick = {
+                                                    if (magicHourKeyInput.isNotBlank()) {
+                                                        MagicHourKeyStore.saveApiKey(context, magicHourKeyInput)
+                                                        magicHourKeyInput = ""
+                                                        hasMagicHourKey = true
+                                                        showMagicHourKeyField = false
+                                                    }
+                                                },
+                                                enabled = magicHourKeyInput.isNotBlank(),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                                                modifier = Modifier.fillMaxWidth().testTag("save_magichour_key_button")
+                                            ) {
+                                                Text("حفظ المفتاح", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            item {
+                                Text(
+                                    text = "نموذج الفيديو (مجاني — 480p):",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFC4B5FD)
+                                )
+                            }
+                            item {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(MagicHourClient.FREE_MODELS) { m ->
+                                        val sel = videoModel == m
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (sel) Color(0xFF4C1D95) else Color(0xFF1E293B),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (sel) Color(0xFFA78BFA) else Color(0xFF334155)
+                                            ),
+                                            modifier = Modifier
+                                                .clickable { videoModel = m }
+                                                .testTag("video_model_$m")
+                                        ) {
+                                            Text(
+                                                text = m,
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            item {
+                                Button(
+                                    onClick = { startVideo() },
+                                    enabled = !videoBusy,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDB2777)),
+                                    modifier = Modifier.fillMaxWidth().testTag("generate_kitchen_video_button")
+                                ) {
+                                    if (videoBusy) {
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    Icon(Icons.Default.Movie, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("🎬 تحويل الصورة إلى فيديو (5 ثوانٍ)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                            if (videoStatus != null) {
+                                item {
+                                    Text(text = videoStatus!!, color = Color(0xFFCBD5E1), fontSize = 11.sp)
+                                }
+                            }
+                            if (videoFile != null) {
+                                item {
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            VideoView(ctx).apply {
+                                                layoutParams = ViewGroup.LayoutParams(
+                                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                                    ViewGroup.LayoutParams.WRAP_CONTENT
+                                                )
+                                                setVideoPath(videoFile!!.absolutePath)
+                                                setOnPreparedListener { mp ->
+                                                    mp.isLooping = true
+                                                    start()
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(220.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .testTag("generated_kitchen_video")
+                                    )
+                                }
+                                item {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    val saved = saveFileToGallery(
+                                                        context = context,
+                                                        file = videoFile!!,
+                                                        mimeType = "video/mp4",
+                                                        folder = "Movies/Kitchen3DStudio",
+                                                        isVideo = true
+                                                    )
+                                                    videoStatus = if (saved) "تم حفظ الفيديو في المعرض ✓" else "تعذر حفظ الفيديو."
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f).testTag("save_kitchen_video_button")
+                                        ) {
+                                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("حفظ في المعرض", fontSize = 11.sp)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { startVideo() },
+                                            enabled = !videoBusy,
+                                            modifier = Modifier.weight(1f).testTag("regenerate_kitchen_video_button")
+                                        ) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("فيديو آخر", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        2 -> {
+                            // ===== FREE SITES TAB =====
+                            item {
+                                Text(
+                                    text = "مواقع توليد الصور المجانية من لقطتك — افتح أياً منها، وسجّل دخولك إن طلب، ثم الصق الوصف المنسوخ من زر النسخ بالأسفل.",
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            item {
+                                OutlinedButton(
+                                    onClick = {
+                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        cm.setPrimaryClip(ClipData.newPlainText("kitchen prompt", promptText))
+                                        promptCopied = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth().testTag("copy_media_prompt_button")
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        if (promptCopied) "تم نسخ الوصف ✓ — الصقه في الموقع" else "📋 نسخ وصف الصورة",
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                            item {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(FREE_IMAGE_SITES) { site ->
+                                        val sel = FREE_IMAGE_SITES[selectedSite] == site
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (sel) Color(0xFF4C1D95) else Color(0xFF1E293B),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (sel) Color(0xFFA78BFA) else Color(0xFF334155)
+                                            ),
+                                            modifier = Modifier
+                                                .clickable { selectedSite = FREE_IMAGE_SITES.indexOf(site) }
+                                                .testTag("free_site_${site.id}")
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Public,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFA78BFA),
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(text = site.titleAr, color = Color.White, fontSize = 11.sp)
+                                                if (sel) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFFA78BFA), modifier = Modifier.size(13.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            item {
+                                Text(
+                                    text = FREE_IMAGE_SITES[selectedSite].noteAr,
+                                    color = Color(0xFFF59E0B),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            item {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        WebView(ctx).apply {
+                                            layoutParams = ViewGroup.LayoutParams(
+                                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                                ViewGroup.LayoutParams.MATCH_PARENT
+                                            )
+                                            settings.javaScriptEnabled = true
+                                            settings.domStorageEnabled = true
+                                            webViewClient = WebViewClient()
+                                            val startUrl = FREE_IMAGE_SITES[selectedSite].url
+                                            loadUrl(startUrl)
+                                            webViewLoadedUrl[0] = startUrl
+                                        }
+                                    },
+                                    update = { webView ->
+                                        val url = FREE_IMAGE_SITES[selectedSite].url
+                                        if (webViewLoadedUrl[0] != url) {
+                                            webView.loadUrl(url)
+                                            webViewLoadedUrl[0] = url
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(480.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .testTag("free_image_site_webview")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Copies a generated file (image/video) into the public gallery. */
+private suspend fun saveFileToGallery(
+    context: Context,
+    file: File,
+    mimeType: String,
+    folder: String,
+    isVideo: Boolean
+): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val fileName = "Kitchen3D_${System.currentTimeMillis()}.${if (isVideo) "mp4" else "jpg"}"
+        val resolver = context.contentResolver
+        val contentValues = ContentValues().apply {
+            if (isVideo) {
+                put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+            } else {
+                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                if (isVideo) {
+                    put(MediaStore.Video.Media.RELATIVE_PATH, folder)
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                } else {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, folder)
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+        }
+        val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val uri = resolver.insert(collection, contentValues) ?: return@withContext false
+        resolver.openOutputStream(uri)?.use { out ->
+            file.inputStream().use { input -> input.copyTo(out) }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear()
+            if (isVideo) contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
+            else contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+        }
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
