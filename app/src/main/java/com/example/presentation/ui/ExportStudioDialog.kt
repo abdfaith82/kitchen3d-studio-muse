@@ -1,15 +1,4 @@
 package com.example.presentation.ui
-
-/**
- * v1.12 (P1-10) — export/import failures used to reach the user as raw
- * English exception text ("خطأ: JSONException ..."). The detail goes to
- * Logcat; the user sees a fixed Arabic message with a retry hint.
- */
-private fun exportFailureMessage(operation: String, e: Exception): String {
-    android.util.Log.e("ExportStudio", "$operation failed", e)
-    return "تعذّر $operation — تحقق من مساحة التخزين وحاول مجدداً."
-}
-
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -1855,4 +1844,14 @@ private fun JsonDataExportSection(
             }
         }
     }
+}
+
+/**
+ * v1.12 (P1-10) — export/import failures used to reach the user as raw
+ * English exception text ("خطأ: JSONException ..."). The detail goes to
+ * Logcat; the user sees a fixed Arabic message with a retry hint.
+ */
+private fun exportFailureMessage(operation: String, e: Exception): String {
+    android.util.Log.e("ExportStudio", "$operation failed", e)
+    return "تعذّر $operation — تحقق من مساحة التخزين وحاول مجدداً."
 }

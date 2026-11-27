@@ -109,7 +109,12 @@ object RealisticKitchenRenderer3D {
         room: RoomStructure,
         elements: List<KitchenElement>,
         project: (Vector3) -> Pair<Offset, Float>?,
-        archVizMode: ArchVizRenderMode = ArchVizRenderMode.PHOTOREAL_DAYLIGHT
+        archVizMode: ArchVizRenderMode = ArchVizRenderMode.PHOTOREAL_DAYLIGHT,
+        // v1.12 fix (run #15): the sun-driven floor patches referenced bare
+        // sunAzimuthDeg/sunElevationDeg that don't exist in this scope — they
+        // are parameters now (defaults = the UiState defaults 42°/55°).
+        sunAzimuthDeg: Float = 42f,
+        sunElevationDeg: Float = 55f
     ) {
         val rawFloorColor = Color(room.floorMaterial.colorHex)
         val floorColor = when (archVizMode) {

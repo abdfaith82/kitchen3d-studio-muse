@@ -1251,7 +1251,9 @@ private fun LiveCinematicPreviewCanvas(
         renderRealisticFloor(
             room = room,
             elements = elements,
-            project = ::project3DTo2D
+            project = ::project3DTo2D,
+            sunAzimuthDeg = sunAzimuth,
+            sunElevationDeg = sunElevation
         )
 
         // 4. Render Background Walls

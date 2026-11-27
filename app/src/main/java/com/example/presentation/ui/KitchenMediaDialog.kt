@@ -1,16 +1,4 @@
 package com.example.presentation.ui
-
-/** v1.12 (P1-10) — Magic Hour returns English statuses ("processing",
- * "queued", "error"...); the user sees Arabic. Unknown values pass through. */
-private fun arabicVideoStatus(status: String): String = when (status) {
-    "complete" -> "مكتمل"
-    "processing" -> "قيد المعالجة"
-    "queued" -> "في الانتظار"
-    "error" -> "فشل"
-    "canceled" -> "أُلغي"
-    else -> status
-}
-
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -1103,4 +1091,15 @@ private suspend fun saveFileToGallery(
     } catch (_: Exception) {
         false
     }
+}
+
+/** v1.12 (P1-10) — Magic Hour returns English statuses ("processing",
+ * "queued", "error"...); the user sees Arabic. Unknown values pass through. */
+private fun arabicVideoStatus(status: String): String = when (status) {
+    "complete" -> "مكتمل"
+    "processing" -> "قيد المعالجة"
+    "queued" -> "في الانتظار"
+    "error" -> "فشل"
+    "canceled" -> "أُلغي"
+    else -> status
 }

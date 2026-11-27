@@ -617,7 +617,9 @@ fun Viewport3D(
                 room = room,
                 elements = elements,
                 project = ::project3DTo2D,
-                archVizMode = archVizMode
+                archVizMode = archVizMode,
+                sunAzimuthDeg = state.sunAzimuthDeg,
+                sunElevationDeg = state.sunElevationDeg
             )
 
             // Draw 3D Floor Door-Opening Clearance Zones (when insufficient or selected)
