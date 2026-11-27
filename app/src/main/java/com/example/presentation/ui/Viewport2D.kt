@@ -649,6 +649,8 @@ fun Viewport2D(
                 .filter {
                     it.code == com.example.core.geometry.ErgonomicRuleCode.INSUFFICIENT_DOOR_CLEARANCE ||
                         it.code == com.example.core.geometry.ErgonomicRuleCode.CORNER_DOOR_INTERFERENCE ||
+                        it.code == com.example.core.geometry.ErgonomicRuleCode.DOOR_SWING_ARC_COLLISION ||
+                        it.code == com.example.core.geometry.ErgonomicRuleCode.DRAWER_PULL_OUT_BLOCKED ||
                         it.code == com.example.core.geometry.ErgonomicRuleCode.SINK_TOO_CLOSE_TO_STOVE ||
                         it.code == com.example.core.geometry.ErgonomicRuleCode.ELEMENT_OVERLAP_COLLISION
                 }

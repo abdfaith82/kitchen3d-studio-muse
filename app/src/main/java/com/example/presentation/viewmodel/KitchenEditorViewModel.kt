@@ -1109,6 +1109,32 @@ class KitchenEditorViewModel @JvmOverloads constructor(
      * the walls but never the cabinets. It is now one undoable batch
      * command, exactly like changeSelectedMaterial.
      */
+    /**
+     * v1.15 — cabinet-only recolour used by the wall/floor harmony presets
+     * in the 3D viewport: one tap recolours every cabinet to the preset's
+     * recommended finish (countertops untouched), as one undoable batch
+     * command, like applyFinishesToAllElements (v1.12 P1-6).
+     */
+    fun applyCabinetFinishToAllElements(cabinetFinish: MaterialFinish) {
+        val selectedIds = _uiState.value.selectedElementIds
+        val before = _uiState.value.project.elements
+        val after = before.map { elem -> elem.copy(material = cabinetFinish) }
+        if (before == after) return
+        val cmd = BatchFloorPlanLayoutCommand(
+            beforeElements = before,
+            afterElements = after,
+            beforeSelection = selectedIds,
+            afterSelection = selectedIds,
+            title = "تطبيق لون الخزائن (${cabinetFinish.name})",
+            description = "تحديث خامة ${after.size} عنصر إلى ${cabinetFinish.name}",
+            category = CommandCategory.MATERIAL_FINISH,
+            onApplyElements = { elems, sel ->
+                _uiState.update { it.copy(project = it.project.copy(elements = elems), selectedElementIds = sel) }
+            }
+        )
+        commandHistory.execute(cmd)
+    }
+
     fun applyFinishesToAllElements(
         cabinetFinish: MaterialFinish,
         countertopFinish: MaterialFinish

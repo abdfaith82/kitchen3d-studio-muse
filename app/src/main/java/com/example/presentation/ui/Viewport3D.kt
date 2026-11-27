@@ -111,6 +111,8 @@ fun Viewport3D(
     onUpdateLightingSimulation: ((Float, Float, Float) -> Unit)? = null,
     onChangeWallFinish: ((MaterialFinish) -> Unit)? = null,
     onChangeFloorMaterial: ((MaterialFinish) -> Unit)? = null,
+    // v1.15 — harmony presets now recolour the cabinets too (one tap).
+    onApplyCabinetFinishToAll: ((MaterialFinish) -> Unit)? = null,
     externalDragType: KitchenElementType? = null,
     externalDragRootOffset: Offset? = null,
     onExternalDragWorldUpdate: ((Float, Float) -> Unit)? = null,
@@ -1678,7 +1680,7 @@ fun Viewport3D(
                         }
 
                         // 1. Curated Harmony Presets (حائط + أرضية بضغطة واحدة)
-                        Text("ثنائيات التناسق المقترحة (حائط + أرضية):", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text("ثنائيات التناسق المقترحة (حائط + أرضية + خزائن):", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1699,6 +1701,11 @@ fun Viewport3D(
                                         .clickable {
                                             onChangeWallFinish?.invoke(preset.wallFinish)
                                             onChangeFloorMaterial?.invoke(preset.floorMaterial)
+                                            // v1.15 — the preset used to stop at
+                                            // wall/floor and leave the cabinets
+                                            // untouched; one tap now recolours
+                                            // them to the recommended finish too.
+                                            onApplyCabinetFinishToAll?.invoke(preset.recommendedCabinetFinish)
                                         }
                                         .testTag("harmony_preset_${preset.id}")
                                 ) {

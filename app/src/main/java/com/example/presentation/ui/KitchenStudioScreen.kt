@@ -719,6 +719,7 @@ fun KitchenStudioScreen(
                         },
                         onChangeWallFinish = { mat -> viewModel.changeWallFinish(mat) },
                         onChangeFloorMaterial = { mat -> viewModel.changeFloorMaterial(mat) },
+                        onApplyCabinetFinishToAll = { mat -> viewModel.applyCabinetFinishToAllElements(mat) },
                         externalDragType = draggingCatalogType,
                         externalDragRootOffset = dragFingerRootOffset,
                         onExternalDragWorldUpdate = { xMm, zMm ->
@@ -826,6 +827,7 @@ fun KitchenStudioScreen(
                             },
                             onChangeWallFinish = { mat -> viewModel.changeWallFinish(mat) },
                             onChangeFloorMaterial = { mat -> viewModel.changeFloorMaterial(mat) },
+                            onApplyCabinetFinishToAll = { mat -> viewModel.applyCabinetFinishToAllElements(mat) },
                             externalDragType = draggingCatalogType,
                             externalDragRootOffset = dragFingerRootOffset,
                             onExternalDragWorldUpdate = { xMm, zMm ->

@@ -1,5 +1,6 @@
 package com.example.core.geometry
 
+import com.example.core.math.OBB
 import com.example.core.math.Vector3
 import com.example.domain.model.KitchenElement
 import com.example.domain.model.KitchenElementType
@@ -10,6 +11,7 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * Severity levels for real-time ergonomic & architectural validation rules.
@@ -46,6 +48,14 @@ enum class ErgonomicRuleCode(
     CORNER_DOOR_INTERFERENCE(
         "تعارض فتح أبواب الخزائن المتعامدة في الزاوية",
         "Insufficient clearance for cabinet doors at corner"
+    ),
+    DOOR_SWING_ARC_COLLISION(
+        "باب الخزانة يصطدم بعائق جانبي أثناء الفتح",
+        "Cabinet door hits a side obstacle while opening"
+    ),
+    DRAWER_PULL_OUT_BLOCKED(
+        "درج الخزانة يصطدم بعائق أثناء السحب",
+        "Cabinet drawer hits an obstacle while pulling out"
     ),
     WORK_TRIANGLE_PERIMETER(
         "محيط مثلث العمل خارج النطاق الإرجونومي القياسي",
@@ -207,6 +217,16 @@ object ErgonomicValidationEngine {
 
         // 2. Evaluate Cabinet Door Swing & Walkway Clearances
         val doorClearanceZones = evaluateDoorClearances(room, visibleElements, issues)
+
+        // 2b. v1.15 — Door-Swing ARC Interference (Kujiale/Sanweijia 干涉检测):
+        // the swept quarter-disc of each hinged leaf vs side obstacles the
+        // straight-line corridor check misses (lateral overlap <= 80 mm).
+        evaluateDoorSwingArcs(visibleElements, issues)
+
+        // 2c. v1.15 — Drawer Pull-Out Blockage: drawers travel straight
+        // forward; a narrow obstacle mostly outside the corridor still
+        // sits in the drawer's path.
+        evaluateDrawerPullOuts(visibleElements, issues)
 
         // 3. Evaluate Dishwasher-to-Sink Distance
         evaluateDishwasherProximity(visibleElements, issues)
@@ -721,6 +741,312 @@ object ErgonomicValidationEngine {
     /**
      * Computes the distance from [origin] along unit horizontal vector [dir] to the inner walls of [room].
      */
+    // v1.15 — door-swing ARC interference (干涉检测, Kujiale/Sanweijia).
+    // The corridor check above measures straight-line clearance in front
+    // of a door, but a hinged leaf sweeps a quarter-disc of radius = leaf
+    // width around its hinge. An obstacle that sits mostly outside the
+    // front corridor (lateral overlap <= 80 mm, so the corridor check
+    // ignores it) can still sit inside that disc and stop the door from
+    // opening. This pass models the swept quarter-disc per hinge, and the
+    // straight pull-out rectangle for drawer units (same blind spot).
+    // Honest scope: wall hits need no separate check — for rectangular
+    // rooms the opposing-wall distance in the corridor check already
+    // covers them, and the disc never reaches a side wall (it stays
+    // inside the cabinet's own width span).
+    private val DROP_DOWN_DOOR_TYPES: Set<KitchenElementType> = setOf(
+        KitchenElementType.DISHWASHER_INTEGRATED,
+        KitchenElementType.BUILTIN_OVEN,
+        KitchenElementType.BASE_UNDER_OVEN,
+        KitchenElementType.TALL_OVEN_TOWER,
+        KitchenElementType.WASHING_MACHINE_FRONT
+    )
+
+    private val CORNER_DOOR_TYPES: Set<KitchenElementType> = setOf(
+        KitchenElementType.BASE_CORNER_L,
+        KitchenElementType.BASE_MAGIC_CORNER,
+        KitchenElementType.WALL_CORNER_L
+    )
+
+    private val DRAWER_ONLY_TYPES: Set<KitchenElementType> = setOf(
+        KitchenElementType.BASE_2_DEEP_DRAWERS,
+        KitchenElementType.BASE_3_DRAWERS,
+        KitchenElementType.BASE_3_DRAWERS_90,
+        KitchenElementType.BASE_4_DRAWERS,
+        KitchenElementType.BASE_MICROWAVE_DRAWER_60,
+        KitchenElementType.BASE_BOTTLE_RACK_15,
+        KitchenElementType.BASE_NARROW_30_SPICE
+    )
+
+    /** How far a footprint must intrude into the swept disc / pull-out rectangle to count (kills grazing false positives at normal L-junctions). */
+    private const val ARC_PENETRATION_MM = 25f
+
+    /** A leaf that sweeps a horizontal quarter-disc while opening. */
+    private fun isArcSwingDoor(type: KitchenElementType): Boolean {
+        if (!hasFrontOpeningDoors(type)) return false
+        if (type in DROP_DOWN_DOOR_TYPES) return false // drops down: no plan sweep
+        if (type in CORNER_DOOR_TYPES) return false // diagonal / blind-corner leaf
+        if (type in DRAWER_ONLY_TYPES) return false // slides straight out: see evaluateDrawerPullOuts
+        return true
+    }
+
+    /** Width of one hinged leaf: full width, halved for two-leaf units. */
+    private fun doorLeafWidthMm(elem: KitchenElement): Float {
+        val leaves = when {
+            elem.customDivisionsCount > 0 -> elem.customDivisionsCount
+            elem.dimensions.x >= 750f -> 2
+            else -> 1
+        }
+        return elem.dimensions.x / leaves.toFloat()
+    }
+
+    /** Full-extension travel of a base drawer (mm). */
+    private fun drawerTravelMm(elem: KitchenElement): Float =
+        min(elem.dimensions.z, 500f).coerceAtLeast(300f)
+
+    private fun evaluateDoorSwingArcs(
+        elements: List<KitchenElement>,
+        issues: MutableList<ErgonomicIssue>
+    ) {
+        for (elem in elements) {
+            if (!isArcSwingDoor(elem.type)) continue
+            val obb = elem.getOBB()
+            val leafR = doorLeafWidthMm(elem)
+            if (leafR < 150f) continue
+            // The swept disc is shrunk by ARC_PENETRATION_MM: a neighbour
+            // whose corner merely grazes the arc (a normal L-junction) is
+            // not a collision; only a real intrusion counts.
+            val discR = leafR - ARC_PENETRATION_MM
+            if (discR <= 0f) continue
+            val frontNormal = obb.axisZ
+            val frontCenter = obb.center + (frontNormal * obb.halfExtents.z)
+            val elemBottomY = obb.center.y - obb.halfExtents.y
+            val elemTopY = obb.center.y + obb.halfExtents.y
+            val doorBandTopY = min(elemTopY, elemBottomY + 2050f)
+
+            // Hinges: the two front corners; each sweeps toward the centre.
+            val hinges = listOf(
+                (frontCenter - (obb.axisX * obb.halfExtents.x)) to obb.axisX,
+                (frontCenter + (obb.axisX * obb.halfExtents.x)) to -obb.axisX
+            )
+
+            for (other in elements) {
+                if (other.id == elem.id) continue
+                if (isCountertopInsertOn(other, elem)) continue
+                if (other.type == KitchenElementType.CEILING_CHANDELIER_MODERN ||
+                    other.type == KitchenElementType.CEILING_LINEAR_LED_PANEL ||
+                    other.type == KitchenElementType.RANGE_HOOD_BOX
+                ) continue
+                // Elevated wall/bridge cabinets do not block floor base cabinets.
+                if (elem.position.y < 500f && other.position.y >= 1350f) continue
+
+                val otherOBB = other.getOBB()
+                val otherBottomY = otherOBB.center.y - otherOBB.halfExtents.y
+                val otherTopY = otherOBB.center.y + otherOBB.halfExtents.y
+                val verticalOverlap = min(doorBandTopY, otherTopY) - max(elemBottomY, otherBottomY)
+                if (verticalOverlap <= 120f) continue
+
+                val corners = otherOBB.getBottomCorners()
+                var nearestMm = Float.MAX_VALUE
+                var hit = false
+                for ((hinge, inward) in hinges) {
+                    if (quarterDiscHitsRect(hinge, inward, frontNormal, discR, corners, otherOBB)) {
+                        hit = true
+                        nearestMm = min(nearestMm, distanceHingeToRect(hinge, corners))
+                    }
+                }
+                if (!hit) continue
+                val gapCm = (nearestMm / 10f).roundToInt()
+                issues.add(
+                    ErgonomicIssue(
+                        id = "door_swing_arc_${elem.id}_${other.id}",
+                        code = ErgonomicRuleCode.DOOR_SWING_ARC_COLLISION,
+                        severity = ValidationSeverity.ERROR,
+                        titleAr = "باب «${elem.name}» يصطدم بـ«${other.name}» أثناء الفتح",
+                        titleEn = "Door of ${elem.name} hits ${other.name} while opening",
+                        descriptionAr = "ضلفة باب «${elem.name}» (عرض الضلفة ${leafR.roundToInt()} ملم) تجتاح قوساً يصطدم بـ«${other.name}» — أقرب نقطة على بعد ${nearestMm.roundToInt()} ملم ($gapCm سم) من المفصلة. انقل العائق الجانبي أو بدّل جهة المفصلة.",
+                        descriptionEn = "The door leaf of ${elem.name} (leaf ${leafR.roundToInt()} mm) sweeps an arc that hits ${other.name} (${nearestMm.roundToInt()} mm from the hinge).",
+                        recommendationAr = "أبعد «${other.name}» عن مسار قوس الباب، أو انقل «${elem.name}» بعيداً عن العائق الجانبي.",
+                        measuredValueMm = nearestMm,
+                        standardRangeLabel = "خلوص ≥ ${leafR.roundToInt()} mm من المفصلة",
+                        affectedElementIds = listOf(elem.id, other.id),
+                        markerPositionMm = Vector3(frontCenter.x, 0f, frontCenter.z)
+                    )
+                )
+            }
+        }
+    }
+
+    private fun evaluateDrawerPullOuts(
+        elements: List<KitchenElement>,
+        issues: MutableList<ErgonomicIssue>
+    ) {
+        for (elem in elements) {
+            if (elem.type !in DRAWER_ONLY_TYPES) continue
+            val obb = elem.getOBB()
+            val travel = drawerTravelMm(elem)
+            val frontNormal = obb.axisZ
+            val frontCenter = obb.center + (frontNormal * obb.halfExtents.z)
+            val elemBottomY = obb.center.y - obb.halfExtents.y
+            val elemTopY = obb.center.y + obb.halfExtents.y
+
+            for (other in elements) {
+                if (other.id == elem.id) continue
+                if (isCountertopInsertOn(other, elem)) continue
+                if (other.type == KitchenElementType.CEILING_CHANDELIER_MODERN ||
+                    other.type == KitchenElementType.CEILING_LINEAR_LED_PANEL ||
+                    other.type == KitchenElementType.RANGE_HOOD_BOX
+                ) continue
+                if (elem.position.y < 500f && other.position.y >= 1350f) continue
+
+                val otherOBB = other.getOBB()
+                val otherBottomY = otherOBB.center.y - otherOBB.halfExtents.y
+                val otherTopY = otherOBB.center.y + otherOBB.halfExtents.y
+                val verticalOverlap = min(elemTopY, otherTopY) - max(elemBottomY, otherBottomY)
+                if (verticalOverlap <= 120f) continue
+
+                // Project the other's footprint into elem's local frame:
+                // the pull-out zone is x in [-hx, hx], z in [hz, hz + travel].
+                var otherMinLocalX = Float.MAX_VALUE
+                var otherMaxLocalX = -Float.MAX_VALUE
+                var otherMinLocalZ = Float.MAX_VALUE
+                var otherMaxLocalZ = -Float.MAX_VALUE
+                for (corner in otherOBB.getBottomCorners()) {
+                    val rel = corner - obb.center
+                    val lx = rel.dot(obb.axisX)
+                    val lz = rel.dot(obb.axisZ)
+                    otherMinLocalX = min(otherMinLocalX, lx)
+                    otherMaxLocalX = max(otherMaxLocalX, lx)
+                    otherMinLocalZ = min(otherMinLocalZ, lz)
+                    otherMaxLocalZ = max(otherMaxLocalZ, lz)
+                }
+                val overlapX = min(otherMaxLocalX, obb.halfExtents.x) - max(otherMinLocalX, -obb.halfExtents.x)
+                val overlapZ = min(otherMaxLocalZ, obb.halfExtents.z + travel) - max(otherMinLocalZ, obb.halfExtents.z)
+                if (overlapX < ARC_PENETRATION_MM || overlapZ < ARC_PENETRATION_MM) continue
+
+                val forwardGapMm = max(0f, otherMinLocalZ - obb.halfExtents.z)
+                val gapCm = (forwardGapMm / 10f).roundToInt()
+                issues.add(
+                    ErgonomicIssue(
+                        id = "drawer_pullout_${elem.id}_${other.id}",
+                        code = ErgonomicRuleCode.DRAWER_PULL_OUT_BLOCKED,
+                        severity = ValidationSeverity.ERROR,
+                        titleAr = "درج «${elem.name}» يصطدم بـ«${other.name}» أثناء السحب",
+                        titleEn = "Drawer of ${elem.name} hits ${other.name} while pulling out",
+                        descriptionAr = "مسار سحب درج «${elem.name}» (سحب ${travel.roundToInt()} ملم) مسدود بـ«${other.name}» على بعد ${forwardGapMm.roundToInt()} ملم ($gapCm سم) من الواجهة. أبعد العائق من أمام الدرج.",
+                        descriptionEn = "The pull-out path of the ${elem.name} drawer (${travel.roundToInt()} mm travel) is blocked by ${other.name} (${forwardGapMm.roundToInt()} mm from the front).",
+                        recommendationAr = "أبعد «${other.name}» من أمام «${elem.name}» ليفتح الدرج كاملاً، أو انقل وحدة الأدراج.",
+                        measuredValueMm = forwardGapMm,
+                        standardRangeLabel = "سحب حر ${travel.roundToInt()} mm",
+                        affectedElementIds = listOf(elem.id, other.id),
+                        markerPositionMm = Vector3(frontCenter.x, 0f, frontCenter.z)
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Does the quarter-disc swept by a door leaf (centre [hinge], radius
+     * [radius], between the inward lateral direction and the forward
+     * direction) intersect the plan footprint of [otherOBB] (its 4 bottom
+     * [corners])? True when a corner lies inside the sector disc, a
+     * footprint edge crosses the arc, or an arc endpoint lies inside the
+     * rectangle.
+     */
+    private fun quarterDiscHitsRect(
+        hinge: Vector3,
+        inward: Vector3,
+        forward: Vector3,
+        radius: Float,
+        corners: List<Vector3>,
+        otherOBB: OBB
+    ): Boolean {
+        val r2 = radius * radius
+        for (c in corners) {
+            val rel = c - hinge
+            val u = rel.dot(inward)
+            val v = rel.dot(forward)
+            if (u >= 0f && v >= 0f && u * u + v * v <= r2) return true
+        }
+        for (i in corners.indices) {
+            val a = corners[i]
+            val b = corners[(i + 1) % corners.size]
+            if (segmentCrossesArc(hinge, a, b, radius, inward, forward)) return true
+        }
+        val endClosed = hinge + (inward * radius)
+        val endOpen = hinge + (forward * radius)
+        if (pointInObbPlan(endClosed, otherOBB, 0f)) return true
+        if (pointInObbPlan(endOpen, otherOBB, 0f)) return true
+        return false
+    }
+
+    /** True when segment AB crosses the circle of [radius] around [hinge] at a point inside the swept sector. */
+    private fun segmentCrossesArc(
+        hinge: Vector3,
+        a: Vector3,
+        b: Vector3,
+        radius: Float,
+        inward: Vector3,
+        forward: Vector3
+    ): Boolean {
+        val d = b - a
+        val f = a - hinge
+        val aa = d.dot(d)
+        if (aa < 1e-6f) return false
+        val bb = 2f * f.dot(d)
+        val cc = f.dot(f) - radius * radius
+        var disc = bb * bb - 4f * aa * cc
+        if (disc < 0f) return false
+        disc = sqrt(disc)
+        val t1 = (-bb - disc) / (2f * aa)
+        val t2 = (-bb + disc) / (2f * aa)
+        for (t in listOf(t1, t2)) {
+            if (t < 0f || t > 1f) continue
+            val p = a + (d * t)
+            val rel = p - hinge
+            if (rel.dot(inward) >= 0f && rel.dot(forward) >= 0f) return true
+        }
+        return false
+    }
+
+    /** Plan (X/Z) point-in-OBB test. */
+    private fun pointInObbPlan(p: Vector3, obb: OBB, toleranceMm: Float): Boolean {
+        val rel = p - obb.center
+        return abs(rel.dot(obb.axisX)) <= obb.halfExtents.x + toleranceMm &&
+            abs(rel.dot(obb.axisZ)) <= obb.halfExtents.z + toleranceMm
+    }
+
+    /** Shortest plan distance from [hinge] to a footprint given by its 4 [corners]. */
+    private fun distanceHingeToRect(hinge: Vector3, corners: List<Vector3>): Float {
+        var best = Float.MAX_VALUE
+        for (c in corners) {
+            val rel = c - hinge
+            best = min(best, sqrt(rel.x * rel.x + rel.z * rel.z))
+        }
+        for (i in corners.indices) {
+            val a = corners[i]
+            val b = corners[(i + 1) % corners.size]
+            best = min(best, distancePointToSegmentPlan(hinge, a, b))
+        }
+        return best
+    }
+
+    private fun distancePointToSegmentPlan(p: Vector3, a: Vector3, b: Vector3): Float {
+        val abx = b.x - a.x
+        val abz = b.z - a.z
+        val len2 = abx * abx + abz * abz
+        if (len2 < 1e-6f) {
+            val dx = p.x - a.x
+            val dz = p.z - a.z
+            return sqrt(dx * dx + dz * dz)
+        }
+        var t = ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2
+        t = t.coerceIn(0f, 1f)
+        val dx = p.x - (a.x + abx * t)
+        val dz = p.z - (a.z + abz * t)
+        return sqrt(dx * dx + dz * dz)
+    }
+
     private fun distanceToWallAlongRay(origin: Vector3, dir: Vector3, room: RoomStructure): Float {
         var minT = Float.MAX_VALUE
         if (dir.x > 1e-4f) {
