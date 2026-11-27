@@ -194,6 +194,17 @@ data class DepthOfFieldConfig(
         val focusPart = (focusDistanceMm / 6000f).coerceIn(0f, 1f)
         return (aperturePart * 0.7f + focusPart * 0.3f).coerceIn(0f, 1f) * bokehStrength.coerceIn(0f, 1f)
     }
+
+    /**
+     * v1.13 — blur radius (px) for the export depth-of-field pass. Aperture
+     * only: f/8 and slower are truly sharp (radius 0), f/2.8 is ~9.5 px at
+     * 4K. (blurAmount() mixes in the focus distance for the preview overlay
+     * and must not drive the export, or f/8 would blur slightly.)
+     */
+    fun exportBlurRadiusPx(widthPx: Int): Float {
+        val aperturePart = ((8f - apertureFStop.coerceIn(1.4f, 16f)) / 6.6f).coerceIn(0f, 1f)
+        return (aperturePart * bokehStrength.coerceIn(0f, 1f) * 24f * (widthPx / 3840f)).coerceIn(0f, 12f)
+    }
 }
 
 /** One complete cinematic render setup — preset + fine tuning. */
@@ -217,7 +228,9 @@ data class CinematicRenderSettings(
         contrastBoost = filmLook.contrast,
         cinematicLetterbox = letterbox || aspect.isLetterboxed,
         includeCountertopStaging = true,
-        filmGrain = filmGrain.coerceIn(0f, 0.3f)
+        filmGrain = filmGrain.coerceIn(0f, 0.3f),
+        // v1.13 — DoF finally reaches the export (v1.12 dropped it here).
+        depthOfField = depthOfField
     )
 
     fun summaryAr(): String {

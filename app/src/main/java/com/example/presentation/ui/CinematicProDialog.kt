@@ -278,7 +278,7 @@ private fun CinematicRenderTab(state: KitchenEditorUiState, viewModel: KitchenEd
                 onChange = { aperture = it }
             )
             Text(
-                text = if (aperture <= 2.8f) "عمق ميدان ضحل — محفوظ مع الإعدادات (تأثير العزل في التصدير قيد التطوير)" else "عمق ميدان عميق — كل شيء واضح",
+                text = if (aperture <= 2.8f) "عمق ميدان ضحل — الخلفية ستضبب في التصدير، والهدف يبقى حاداً" else "عمق ميدان عميق — كل شيء واضح",
                 color = Color(0xFF94A3B8),
                 fontSize = 12.sp
             )
@@ -338,9 +338,9 @@ private fun CinematicRenderTab(state: KitchenEditorUiState, viewModel: KitchenEd
                     )
                     appliedMessage = "تم التطبيق ✅\n${settings.summaryAr()}\n" +
                         "الإضاءة والعدسة تغيّرتا الآن في المشهد، والعدسة والتعريض وحبّة " +
-                        "الفيلم وقيم ما بعد المعالجة تُستخدم في تصدير 4K من استوديو الرندر. " +
-                        "ملاحظة: فتحة العدسة محفوظة مع الإعدادات، وتأثير عمق الميدان " +
-                        "في التصدير قيد التطوير — التصدير الحالي يحافظ على كل شيء حاداً."
+                        "الفيلم وقيم ما بعد المعالجة تُستخدم في تصدير 4K من استوديو الرندر، " +
+                        "بما فيها عمق الميدان الحقيقي: فتحة f/${settings.depthOfField.apertureFStop} " +
+                        "تضبب الخلفية في التصدير بينما يبقى هدف الكاميرا حاداً."
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED))

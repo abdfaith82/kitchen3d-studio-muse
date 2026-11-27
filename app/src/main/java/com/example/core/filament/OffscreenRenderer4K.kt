@@ -59,7 +59,10 @@ data class CinematicPostProcessConfig(
     val contrastBoost: Float = 1.14f,      // 0.8..1.5 (Filmic S-Curve Contrast)
     val cinematicLetterbox: Boolean = false, // 2.39:1 CinemaScope Aspect Ratio Framing Bars
     val includeCountertopStaging: Boolean = true, // Subtle Kettle, Indoor Plant & Glass Jars staging
-    val filmGrain: Float = 0f // 0.0..0.3 (v1.12: film grain from Cinematic Pro, applied in the final pixel loop)
+    val filmGrain: Float = 0f, // 0.0..0.3 (v1.12: film grain from Cinematic Pro, applied in the final pixel loop)
+    // v1.13: depth of field from Cinematic Pro (aperture). null = DoF off —
+    // plain renders behave exactly as before.
+    val depthOfField: DepthOfFieldConfig? = null
 )
 
 /**
@@ -285,10 +288,17 @@ object OffscreenRenderer4K {
         val hdrG = FloatArray(width * height)
         val hdrB = FloatArray(width * height)
         val pixels = IntArray(width * height)
+        // v1.13 (DoF) — per-pixel hit distance for the depth-of-field pass.
+        // f/2.8 → ~10 px blur radius at 4K, f/5.6 → ~4 px, f/8+ → off.
+        // Only allocated when DoF is actually enabled; plain renders pay nothing.
+        val dofConfig = postProcessConfig.depthOfField
+        val dofRadiusPx = dofConfig?.exportBlurRadiusPx(width) ?: 0f
+        val dofEnabled = dofRadiusPx >= 0.75f
+        val depthMm: FloatArray? = if (dofEnabled) FloatArray(width * height) { Float.MAX_VALUE } else null
         val completedTiles = AtomicInteger(0)
         val lastReportedPercent = AtomicInteger(-1)
 
-        fun traceAt(fx: Float, fy: Float): Vector3 {
+        fun traceAt(fx: Float, fy: Float, depthOut: FloatArray? = null): Vector3 {
             val normY = 1.0f - 2.0f * fy / height.toFloat()
             val normX = 2.0f * fx / width.toFloat() - 1.0f
             val rayDir = (forward + right * (normX * halfWidth) + up * (normY * halfHeight)).normalized()
@@ -299,13 +309,17 @@ object OffscreenRenderer4K {
                 ledStrips = ledStrips,
                 envSH = envSH,
                 exposure = exposure,
-                bounce = 0
+                bounce = 0,
+                depthOut = depthOut
             )
         }
 
         coroutineScope {
             (0 until tilesY).map { ty ->
                 async {
+                    // v1.13 — one reusable depth scratch per worker (no
+                    // allocation per pixel/sample in the hot loop).
+                    val sampleDepth = if (depthMm != null) FloatArray(1) { Float.MAX_VALUE } else null
                     for (tx in 0 until tilesX) {
                         coroutineContext.ensureActive() // Cancellation check
 
@@ -321,20 +335,32 @@ object OffscreenRenderer4K {
                                     var ar = 0f
                                     var ag = 0f
                                     var ab = 0f
+                                    var depthSum = 0f
+                                    var depthCount = 0
                                     for ((ox, oy) in AA_OFFSETS) {
-                                        val c = traceAt(x + ox, y + oy)
+                                        if (sampleDepth != null) sampleDepth[0] = Float.MAX_VALUE
+                                        val c = traceAt(x + ox, y + oy, sampleDepth)
                                         ar += c.x
                                         ag += c.y
                                         ab += c.z
+                                        if (sampleDepth != null && sampleDepth[0] < Float.MAX_VALUE) {
+                                            depthSum += sampleDepth[0]
+                                            depthCount++
+                                        }
                                     }
                                     hdrR[idx] = ar * 0.25f
                                     hdrG[idx] = ag * 0.25f
                                     hdrB[idx] = ab * 0.25f
+                                    if (depthMm != null) {
+                                        depthMm[idx] = if (depthCount > 0) depthSum / depthCount else Float.MAX_VALUE
+                                    }
                                 } else {
-                                    val c = traceAt(x + 0.5f, y + 0.5f)
+                                    if (sampleDepth != null) sampleDepth[0] = Float.MAX_VALUE
+                                    val c = traceAt(x + 0.5f, y + 0.5f, sampleDepth)
                                     hdrR[idx] = c.x
                                     hdrG[idx] = c.y
                                     hdrB[idx] = c.z
+                                    if (depthMm != null) depthMm[idx] = sampleDepth!![0]
                                 }
                             }
                         }
@@ -464,18 +490,45 @@ object OffscreenRenderer4K {
                     cb *= vig
                 }
 
-                // Film grain (v1.12): deterministic per-pixel hash noise, so the
-                // Cinematic Pro grain slider actually reaches the export.
-                if (filmGrain > 0.001f) {
-                    val hash = (x * 374761393 + y * 668265263) * 974634211
-                    val noise = (((hash and 0x7FFFFFFF) % 1000) / 1000f - 0.5f) * filmGrain
-                    cr = (cr + noise).coerceIn(0f, 1f)
-                    cg = (cg + noise).coerceIn(0f, 1f)
-                    cb = (cb + noise).coerceIn(0f, 1f)
-                }
-
+                // v1.13 — film grain moved AFTER the DoF blur below (grain lives
+                // on the film plane, not the scene, so it must stay sharp).
                 val hex = PbrMaterial.linearRgbToHex(Vector3(cr, cg, cb))
                 pixels[idx] = hex.toInt()
+            }
+        }
+
+        // v1.13 — depth of field (aperture from Cinematic Pro; focus is the
+        // camera target, i.e. the subject of the shot): one separable box blur
+        // at the max radius, blended per-pixel by |depth - focal| so the
+        // subject stays sharp and the background/foreground melts away.
+        if (dofEnabled && depthMm != null) {
+            applyDepthOfField(
+                pixels = pixels,
+                depthMm = depthMm,
+                width = width,
+                height = height,
+                letterboxBarHeight = letterboxBarHeight,
+                radiusPx = dofRadiusPx,
+                focalMm = (cameraTarget - cameraEye).length()
+            )
+        }
+
+        // Film grain (v1.12, moved out of the pixel loop in v1.13 so it stays
+        // sharp after the DoF blur): deterministic per-pixel hash noise.
+        if (filmGrain > 0.001f) {
+            for (y in 0 until height) {
+                if (postProcessConfig.cinematicLetterbox && (y < letterboxBarHeight || y >= height - letterboxBarHeight)) continue
+                val rowOffset = y * width
+                for (x in 0 until width) {
+                    val idx = rowOffset + x
+                    val packed = pixels[idx]
+                    val hash = (x * 374761393 + y * 668265263) * 974634211
+                    val noise = ((((hash and 0x7FFFFFFF) % 1000) / 1000f - 0.5f) * filmGrain * 255f).toInt()
+                    val r = (((packed shr 16) and 0xFF) + noise).coerceIn(0, 255)
+                    val g = (((packed shr 8) and 0xFF) + noise).coerceIn(0, 255)
+                    val b = ((packed and 0xFF) + noise).coerceIn(0, 255)
+                    pixels[idx] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                }
             }
         }
 
@@ -592,6 +645,113 @@ object OffscreenRenderer4K {
      * Traces a physical light ray through the scene, evaluating PBR Cook-Torrance,
      * procedural marble/wood textures, shadows, clearcoat, and dielectric transmission.
      */
+    /**
+     * v1.13 (P1-3) — contact ambient occlusion: 4 rays at 45° around the
+     * normal, 500 mm range. Returns 1.0 (open) down to 0.45 (fully enclosed).
+     */
+    private fun computeContactAo(point: Vector3, normal: Vector3, colliders: List<BoxCollider>): Float {
+        val up = if (abs(normal.y) > 0.9f) Vector3(1f, 0f, 0f) else Vector3.UNIT_Y
+        val tangent = normal.cross(up).normalized()
+        val bitangent = normal.cross(tangent).normalized()
+        val dirs = arrayOf(
+            (normal * 0.7071f + tangent * 0.7071f).normalized(),
+            (normal * 0.7071f - tangent * 0.7071f).normalized(),
+            (normal * 0.7071f + bitangent * 0.7071f).normalized(),
+            (normal * 0.7071f - bitangent * 0.7071f).normalized()
+        )
+        var hits = 0
+        for (d in dirs) {
+            if (intersectScene(Ray(point + normal * 2.0f, d), colliders, maxDist = 500f) != null) hits++
+        }
+        return 1f - 0.55f * (hits / 4f)
+    }
+
+    /**
+     * v1.13 (DoF) — depth of field on the tonemapped pixels. Horizontal box
+     * blur into a temp buffer, then a vertical pass that blends the blurred
+     * value back by a depth-based factor (smoothstepped), so only
+     * out-of-focus depths blur. Letterbox bars are copied sharp.
+     */
+    private fun applyDepthOfField(
+        pixels: IntArray,
+        depthMm: FloatArray,
+        width: Int,
+        height: Int,
+        letterboxBarHeight: Int,
+        radiusPx: Float,
+        focalMm: Float
+    ) {
+        val radius = radiusPx.roundToInt().coerceAtLeast(1)
+        val win = radius * 2 + 1
+        val tmp = IntArray(width * height)
+        // Horizontal box blur (sliding window, channel-wise).
+        for (y in 0 until height) {
+            val row = y * width
+            var rSum = 0
+            var gSum = 0
+            var bSum = 0
+            for (kx in -radius..radius) {
+                val px = pixels[row + kx.coerceIn(0, width - 1)]
+                rSum += (px shr 16) and 0xFF
+                gSum += (px shr 8) and 0xFF
+                bSum += px and 0xFF
+            }
+            for (x in 0 until width) {
+                tmp[row + x] = (0xFF shl 24) or ((rSum / win) shl 16) or ((gSum / win) shl 8) or (bSum / win)
+                val xOut = (x - radius).coerceIn(0, width - 1)
+                val xIn = (x + radius + 1).coerceIn(0, width - 1)
+                val pOut = pixels[row + xOut]
+                val pIn = pixels[row + xIn]
+                rSum += ((pIn shr 16) and 0xFF) - ((pOut shr 16) and 0xFF)
+                gSum += ((pIn shr 8) and 0xFF) - ((pOut shr 8) and 0xFF)
+                bSum += (pIn and 0xFF) - (pOut and 0xFF)
+            }
+        }
+        // Vertical pass + depth-based blend back into pixels.
+        val sharpBand = focalMm * 0.12f
+        val falloff = focalMm * 0.5f
+        for (x in 0 until width) {
+            var rSum = 0
+            var gSum = 0
+            var bSum = 0
+            for (ky in -radius..radius) {
+                val px = tmp[ky.coerceIn(0, height - 1) * width + x]
+                rSum += (px shr 16) and 0xFF
+                gSum += (px shr 8) and 0xFF
+                bSum += px and 0xFF
+            }
+            for (y in 0 until height) {
+                val idx = y * width + x
+                if (letterboxBarHeight == 0 || (y >= letterboxBarHeight && y < height - letterboxBarHeight)) {
+                    val depth = depthMm[idx]
+                    val defocus = if (depth >= Float.MAX_VALUE / 2f) 1f
+                        else ((abs(depth - focalMm) - sharpBand) / falloff).coerceIn(0f, 1f)
+                    val t = defocus * defocus * (3f - 2f * defocus)
+                    if (t > 0.001f) {
+                        val br = rSum / win
+                        val bg = gSum / win
+                        val bb = bSum / win
+                        val sharp = pixels[idx]
+                        val sr = (sharp shr 16) and 0xFF
+                        val sg = (sharp shr 8) and 0xFF
+                        val sb = sharp and 0xFF
+                        val r = (sr + (br - sr) * t).toInt().coerceIn(0, 255)
+                        val g = (sg + (bg - sg) * t).toInt().coerceIn(0, 255)
+                        val b = (sb + (bb - sb) * t).toInt().coerceIn(0, 255)
+                        pixels[idx] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    }
+                }
+                val yOut = (y - radius).coerceIn(0, height - 1)
+                val yIn = (y + radius + 1).coerceIn(0, height - 1)
+                val pOut = tmp[yOut * width + x]
+                val pIn = tmp[yIn * width + x]
+                rSum += ((pIn shr 16) and 0xFF) - ((pOut shr 16) and 0xFF)
+                gSum += ((pIn shr 8) and 0xFF) - ((pOut shr 8) and 0xFF)
+                bSum += (pIn and 0xFF) - (pOut and 0xFF)
+            }
+        }
+    }
+
     private fun traceRay(
         ray: Ray,
         colliders: List<BoxCollider>,
@@ -599,14 +759,18 @@ object OffscreenRenderer4K {
         ledStrips: List<LedSpotLight>,
         envSH: SphericalHarmonics,
         exposure: CameraExposure,
-        bounce: Int
+        bounce: Int,
+        depthOut: FloatArray? = null
     ): Vector3 {
         val hit = intersectScene(ray, colliders) ?: run {
             // Environment background / sky radiance
+            if (bounce == 0) depthOut?.let { it[0] = Float.MAX_VALUE }
             val dirY = ray.direction.y.coerceIn(0f, 1f)
             val skyColor = Vector3(0.5f, 0.7f, 1.0f) * dirY + Vector3(0.9f, 0.95f, 1.0f) * (1f - dirY)
             return skyColor * (0.2f * exposure.displayScale)
         }
+        // v1.13 (DoF) — the primary hit distance, for the depth buffer.
+        if (bounce == 0) depthOut?.let { it[0] = hit.distance }
 
         val mat = hit.material
         val surfaceAlbedo = evaluateProceduralSurfaceAlbedo(hit)
@@ -706,7 +870,12 @@ object OffscreenRenderer4K {
         } else 1.0f
         // Warm indirect GI bounce from floor and wood surfaces onto walls, countertops, and upper cabinets
         val giWarmBounce = Vector3(1.04f, 0.96f, 0.86f) * (0.10f * (1.0f - n.y.coerceIn(-1f, 1f) * 0.35f))
-        val ambientDiffuse = surfaceAlbedo * (irradiance + giWarmBounce) * (1.0f - mat.metallic) * (0.38f * floorAo)
+        // v1.13 (P1-3) — real contact ambient occlusion: 4 short rays in a
+        // cone around the normal. A surface under a cabinet or in a corner
+        // gets less ambient than an open wall, so cabinets stop looking
+        // like they float. Primary rays only; 500 mm range = contact-only.
+        val contactAo = if (bounce == 0) computeContactAo(hit.hitPoint, n, colliders) else 1.0f
+        val ambientDiffuse = surfaceAlbedo * (irradiance + giWarmBounce) * (1.0f - mat.metallic) * (0.38f * floorAo * contactAo)
         finalRgb = finalRgb + ambientDiffuse
 
         // 4. Optical Refraction / Transmission for Glass Cabinets, Vitrines & Countertop Glass Jars

@@ -238,7 +238,11 @@ fun RenderStudioDialog(
                 contrastBoost = contrastBoost,
                 cinematicLetterbox = cinematicLetterbox,
                 includeCountertopStaging = includeCountertopStaging,
-                filmGrain = filmGrain
+                filmGrain = filmGrain,
+                // v1.13 — the Cinematic Pro aperture reaches the export as a
+                // real depth-of-field blur (null when no cinematic settings
+                // were applied, so plain renders are unchanged).
+                depthOfField = cinematicPost?.depthOfField
             )
 
             val res = OffscreenRenderer4K.renderScene(

@@ -50,8 +50,11 @@ import com.example.data.remote.FirestoreKitchenDesign
 import com.example.data.remote.FirestoreKitchenRepository
 import com.example.data.remote.KitchenCostCalculator
 import com.example.data.remote.ProjectCostDistribution
+import android.view.Choreographer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -211,6 +214,11 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 ) : AndroidViewModel(application) {
 
     private val commandHistory = CommandHistory(maxCapacity = 150)
+    // v1.13 — nudge coalescing: the last transform command + when it landed.
+    // A burst of nudge taps on the same element within 1.5 s merges into
+    // ONE undo entry instead of one entry per tap.
+    private var lastTransformCommand: TransformCommand? = null
+    private var lastTransformAtMs: Long = 0L
 
     // v1.12 (P0-2) — sketch state lives here so rotating the phone no longer
     // wipes the hand-drawn sketch (the dialog's remember{} state died on
@@ -648,6 +656,37 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         val currentElem = _uiState.value.project.elements.find { it.id == elementId } ?: return
         if (currentElem.position == oldPos && currentElem.rotationY == oldRot && currentElem.dimensions == oldDims) return
 
+        val now = System.currentTimeMillis()
+        val prev = lastTransformCommand
+        // v1.13 — nudge coalescing: if the top undo entry is our own last
+        // transform on the SAME element within 1.5 s (a burst of nudge taps,
+        // or a nudge followed by a drag), replace it with one command that
+        // keeps the ORIGINAL old pose and only updates the new pose — so 10
+        // taps undo in one step instead of ten. The `===` check proves the
+        // entry was not undone or replaced by another action in between.
+        if (prev != null && now - lastTransformAtMs <= 1500L &&
+            commandHistory.peekTop() === prev && prev.elementId == elementId
+        ) {
+            val merged = TransformCommand(
+                elementId = elementId,
+                oldPosition = prev.oldPosition,
+                newPosition = currentElem.position,
+                oldRotationY = prev.oldRotationY,
+                newRotationY = currentElem.rotationY,
+                oldDimensions = prev.oldDimensions,
+                newDimensions = currentElem.dimensions,
+                applyTransform = { id, pos, rot, dims ->
+                    applyElementTransform(id, pos, rot, dims)
+                },
+                elementName = currentElem.name
+            )
+            if (commandHistory.replaceTop(merged)) {
+                lastTransformCommand = merged
+                lastTransformAtMs = now
+            }
+            return
+        }
+
         val cmd = TransformCommand(
             elementId = elementId,
             oldPosition = oldPos,
@@ -662,6 +701,8 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             elementName = currentElem.name
         )
         commandHistory.execute(cmd)
+        lastTransformCommand = cmd
+        lastTransformAtMs = now
     }
 
     fun applyElementTransform(id: String, pos: Vector3, rot: Float, dims: Vector3) {
@@ -1939,6 +1980,48 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     // never lag). Any button press also stops the turntable first.
     // ==========================================
 
+    /**
+     * v1.13 — waits for the next display vsync and returns its timestamp.
+     * The tween loops below drive off real frame times instead of assuming
+     * a fixed 16 ms frame, so glides stay smooth on 60/90/120 Hz screens.
+     * Cancellation removes the pending callback.
+     */
+    private suspend fun awaitNextFrame(): Long = suspendCancellableCoroutine { cont ->
+        val callback = Choreographer.FrameCallback { frameTimeNanos ->
+            if (cont.isActive) cont.resume(frameTimeNanos)
+        }
+        cont.invokeOnCancellation {
+            Choreographer.getInstance().removeFrameCallback(callback)
+        }
+        Choreographer.getInstance().postFrameCallback(callback)
+    }
+
+    /**
+     * v1.13 — frame-synced pose tween: one state update per vsync, progress
+     * from real frame timestamps. [applyPose] receives every interpolated
+     * pose, including the final target pose at progress 1.0.
+     */
+    private suspend fun runPoseTween(
+        start: CameraPose,
+        target: CameraPose,
+        durationMs: Long,
+        applyPose: (CameraPose) -> Unit
+    ) {
+        val startNanos = awaitNextFrame()
+        while (true) {
+            val now = awaitNextFrame()
+            val progress = ((now - startNanos) / 1_000_000f / durationMs).coerceIn(0f, 1f)
+            val interpolated = CameraTweenEngine.interpolatePose(
+                start = start,
+                target = target,
+                progress = progress,
+                easing = CameraTweenEngine::easeInOutCubic
+            )
+            applyPose(interpolated)
+            if (progress >= 1f) break
+        }
+    }
+
     fun animateCameraDelta(deltaYaw: Float, deltaPitch: Float, zoomFactor: Float, durationMs: Long = 320L) {
         stopCameraAutoRotate()
         cameraAnimationJob?.cancel()
@@ -1971,15 +2054,9 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             // viewport (which uses it while tweening) never flashes a stale eye.
             _uiState.update { it.copy(isCameraTweening = true, walkCameraPosition = startPose.eyePosition) }
             try {
-                val steps = 20
-                val stepDelay = durationMs / steps
-                for (i in 1..steps) {
-                    val interpolated = CameraTweenEngine.interpolatePose(
-                        start = startPose,
-                        target = targetPose,
-                        progress = i.toFloat() / steps,
-                        easing = CameraTweenEngine::easeInOutCubic
-                    )
+                // v1.13 — frame-synced: one update per vsync, progress from
+                // real frame times (was: 20 fixed steps with delay(16ms)).
+                runPoseTween(startPose, targetPose, durationMs) { interpolated ->
                     _uiState.update {
                         it.copy(
                             cameraYaw = interpolated.yawDegrees,
@@ -1990,7 +2067,6 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                             walkLookPitch = interpolated.pitchDegrees
                         )
                     }
-                    delay(stepDelay)
                 }
                 _uiState.update {
                     it.copy(
@@ -2199,18 +2275,10 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             }
 
             try {
-                val steps = 30
-                val stepDelay = durationMs / steps
-
-                for (i in 1..steps) {
-                    val progress = i.toFloat() / steps
-                    val interpolated = CameraTweenEngine.interpolatePose(
-                        start = currentPose,
-                        target = targetPose,
-                        progress = progress,
-                        easing = CameraTweenEngine::easeInOutCubic
-                    )
-
+                // v1.13 — frame-synced: one update per vsync, progress from
+                // real frame times (was: 30 fixed steps with delay(25ms),
+                // visibly steppy on 60 Hz and worse on 120 Hz screens).
+                runPoseTween(currentPose, targetPose, durationMs) { interpolated ->
                     _uiState.update {
                         it.copy(
                             cameraMode = interpolated.mode,
@@ -2224,7 +2292,6 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                             walkLookPitch = interpolated.pitchDegrees
                         )
                     }
-                    delay(stepDelay)
                 }
 
                 _uiState.update {

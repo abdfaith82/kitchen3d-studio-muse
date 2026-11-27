@@ -69,6 +69,26 @@ class CommandHistory(private val maxCapacity: Int = 100) {
     }
 
     /**
+     * v1.13 — the top undo entry, if any (used for nudge coalescing: the
+     * caller checks it is still the command it last pushed).
+     */
+    fun peekTop(): Command? = undoStack.lastOrNull()
+
+    /**
+     * v1.13 — replaces the top undo entry with [replacement] (a burst of
+     * nudge taps becomes one undo step). Does not touch the redo stack —
+     * safe here because the caller only replaces an entry it just pushed,
+     * at a moment when the redo stack was already cleared by that push.
+     * Returns false when the stack is empty.
+     */
+    fun replaceTop(replacement: Command): Boolean {
+        if (undoStack.isEmpty()) return false
+        undoStack[undoStack.lastIndex] = replacement
+        updateState()
+        return true
+    }
+
+    /**
      * Reverts the most recent command on the undo stack and moves it to the redo stack.
      */
     fun undo(): Boolean {

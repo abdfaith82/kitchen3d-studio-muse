@@ -225,6 +225,13 @@ fun Viewport3D(
     var orbitVelocity by remember { mutableStateOf(Offset.Zero) }
     var panVelocity by remember { mutableStateOf(Offset.Zero) }
     var isInteracting by remember { mutableStateOf(false) }
+    // v1.13 (P1-16/P1-18) — drag-vs-orbit is decided ONCE per gesture, from
+    // the finger-down point (not the drifted centroid), and a two-finger
+    // parallel move is a pan, not an orbit. gestureDownPoint is captured in
+    // onPress below; gestureClassified3D stops re-testing on every pan event.
+    var gestureDownPoint by remember { mutableStateOf<Offset?>(null) }
+    var gestureClassified3D by remember { mutableStateOf(false) }
+    var twoFingerPanActive by remember { mutableStateOf(false) }
 
     val currentState by rememberUpdatedState(state)
 
@@ -300,6 +307,23 @@ fun Viewport3D(
                         return@detectTransformGestures
                     }
 
+                    // v1.13 (P1-18) — a two-finger parallel move (no pinch) is a
+                    // pan, not an orbit: detectTransformGestures reports it as
+                    // pan with zoom ≈ 1, which used to fall through to the orbit
+                    // branch below. Walk mode has no pan target, so it keeps
+                    // the old look-around behaviour.
+                    if (twoFingerPanActive && pan != Offset.Zero &&
+                        latestState.cameraMode != CameraMode.FIRST_PERSON_WALK
+                    ) {
+                        activeDraggedGizmoAxis = null
+                        isDraggingElement3D = false
+                        val (pdx, pdy) = CameraMotionPolicy.panDeltaForDrag(pan.x * 1.6f, pan.y * 1.6f)
+                        onPan?.invoke(pdx, pdy)
+                        val (pvx, pvy) = CameraMotionPolicy.panDeltaForDrag(pan.x * 0.8f, pan.y * 0.8f)
+                        panVelocity = Offset(pvx, pvy)
+                        return@detectTransformGestures
+                    }
+
                     // 2. If in Furniture Placement Mode, dragging moves the 3D ghost preview on the floor/wall
                     if (latestState.isFurniturePlacementMode && pan != Offset.Zero) {
                         val targetY = latestState.activePlacementType.defaultElevationY
@@ -317,14 +341,20 @@ fun Viewport3D(
                         val gY = hitCache.gizmoAxisYEndScreen
                         val gZ = hitCache.gizmoAxisZEndScreen
 
-                        if (!isDraggingElement3D && activeDraggedGizmoAxis == null) {
+                        if (!gestureClassified3D && !isDraggingElement3D && activeDraggedGizmoAxis == null) {
+                            // v1.13 (P1-16) — classify ONCE per gesture, from the
+                            // finger-down point. The old code re-tested on the
+                            // drifted centroid on every pan event, so a drag
+                            // starting on a cabinet edge often became an orbit.
+                            gestureClassified3D = true
+                            val hitPoint = gestureDownPoint ?: centroid
                             val hitRadius = 76f
                             val hitGizmo = if (selectedElem != null && gO != null) {
                                 when {
-                                    gX != null && (centroid - gX).getDistance() <= hitRadius -> 'X'
-                                    gY != null && (centroid - gY).getDistance() <= hitRadius -> 'Y'
-                                    gZ != null && (centroid - gZ).getDistance() <= hitRadius -> 'Z'
-                                    (centroid - gO).getDistance() <= hitRadius -> {
+                                    gX != null && (hitPoint - gX).getDistance() <= hitRadius -> 'X'
+                                    gY != null && (hitPoint - gY).getDistance() <= hitRadius -> 'Y'
+                                    gZ != null && (hitPoint - gZ).getDistance() <= hitRadius -> 'Z'
+                                    (hitPoint - gO).getDistance() <= hitRadius -> {
                                         if (interactionMode3D == Viewport3DInteractionMode.MOVE_ELEVATION_Y) 'Y' else 'F'
                                     }
                                     else -> null
@@ -343,7 +373,11 @@ fun Viewport3D(
                             } else if (interactionMode3D == Viewport3DInteractionMode.MOVE_MODEL_XZ ||
                                 interactionMode3D == Viewport3DInteractionMode.MOVE_ELEVATION_Y
                             ) {
-                                val hitId = hitTestElement3D(centroid) ?: selectedElem?.id
+                                // v1.13 (P1-16) — no more `?: selectedElem?.id`
+                                // fallback: dragging empty space in a Move mode
+                                // used to grab the selected cabinet, making it
+                                // impossible to orbit there. Empty space orbits.
+                                val hitId = hitTestElement3D(hitPoint)
                                 val targetElem = latestState.project.elements.find { it.id == hitId }
                                 if (targetElem != null && !targetElem.isLocked) {
                                     if (selectedElem?.id != targetElem.id) {
@@ -360,7 +394,7 @@ fun Viewport3D(
                                 }
                             } else {
                                 // Auto Smart Mode: check if user touched inside any 3D cabinet/model projected bounding box
-                                val hitId = hitTestElement3D(centroid)
+                                val hitId = hitTestElement3D(hitPoint)
                                 if (hitId != null) {
                                     val targetElem = latestState.project.elements.find { it.id == hitId }
                                     if (targetElem != null && !targetElem.isLocked) {
@@ -430,9 +464,10 @@ fun Viewport3D(
                         }
                     }
 
-                    activeDraggedGizmoAxis = null
-                    isDraggingElement3D = false
-
+                    // v1.13 (P1-16) — no per-event drag reset here anymore:
+                    // the classification above runs once per gesture, and drag
+                    // state is cleared on release (onPress) / tap, so a gesture
+                    // can no longer flip between drag and orbit mid-stroke.
                     if (pan != Offset.Zero) {
                         if (latestState.cameraMode == CameraMode.FIRST_PERSON_WALK) {
                             // v1.6 — walk-look yaw was inverted (drag right
@@ -466,6 +501,11 @@ fun Viewport3D(
                         isInteracting = true
                         orbitVelocity = Offset.Zero
                         panVelocity = Offset.Zero
+                        // v1.13 (P1-16) — a new gesture starts here: remember
+                        // where the finger went down; the transform detector
+                        // classifies drag-vs-orbit from this point, once.
+                        gestureDownPoint = pressPt
+                        gestureClassified3D = false
                         val latestState = currentState
                         if (latestState.isFurniturePlacementMode) {
                             val targetY = latestState.activePlacementType.defaultElevationY
@@ -493,11 +533,15 @@ fun Viewport3D(
                         draggedElementId3D = null
                         accumDragDelta3D = Vector3.ZERO
                         smoothedDragDelta3D = Vector3.ZERO
+                        gestureDownPoint = null
+                        gestureClassified3D = false
                     },
                     onTap = { tapOffset ->
                         val latestState = currentState
                         activeDraggedGizmoAxis = null
                         isDraggingElement3D = false
+                        gestureDownPoint = null
+                        gestureClassified3D = false
                         accumDragDelta3D = Vector3.ZERO
 
                         // Check if tapping an existing element first (using full 2D projected bounding box + center fallback)
@@ -517,6 +561,18 @@ fun Viewport3D(
                         }
                     }
                 )
+            }
+            .pointerInput(Unit) {
+                // v1.13 (P1-18) — passive two-finger tracker: counts pressed
+                // pointers without consuming anything, so the transform
+                // detector above can tell a parallel two-finger move (pan)
+                // from a one-finger drag (orbit / element move).
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        twoFingerPanActive = event.changes.count { it.pressed } >= 2
+                    }
+                }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
