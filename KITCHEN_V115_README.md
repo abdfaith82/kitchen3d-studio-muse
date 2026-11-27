@@ -43,7 +43,11 @@ change, issues render on the 2D plan via `Viewport2D` highlights):
   rule (`ARC_PENETRATION_MM`) means a neighbour whose corner merely grazes
   the arc (a normal L-junction) is NOT flagged. Excluded: drop-down doors
   (dishwasher/oven/washer — no plan sweep), corner units (diagonal leaf),
-  drawer units (they slide; see below).
+  drawer units (they slide; see below). No automatic fix: only the user
+  knows the hinge side / where the blocker should go, so `autoFixErgonomicIssue`
+  has an explicit no-op branch for the new codes (the `when` there is
+  exhaustive — a missing branch fails the build) and the dialog hides the
+  "تصحيح تلقائي" button for these two codes instead of showing a dead one.
 - **`DRAWER_PULL_OUT_BLOCKED` (ERROR)**: the drawer's straight pull-out
   rectangle (cabinet width × travel = min(depth, 500 mm)) vs other
   footprints, same 25 mm penetration rule and the same vertical-band rule

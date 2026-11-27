@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.core.geometry.ErgonomicIssue
+import com.example.core.geometry.ErgonomicRuleCode
 import com.example.core.geometry.ErgonomicValidationReport
 import com.example.core.geometry.ValidationSeverity
 import com.example.core.geometry.WorkTriangleMetrics
@@ -565,21 +566,28 @@ private fun ErgonomicIssueCard(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                Button(
-                    onClick = onAutoFixClick,
-                    modifier = Modifier
-                        .height(34.dp)
-                        .testTag("autofix_issue_button_${issue.code.name.lowercase()}"),
-                    colors = ButtonDefaults.buttonColors(containerColor = accentColor),
-                    contentPadding = ButtonDefaults.TextButtonContentPadding
+                // v1.15 — arc/drawer issues have no safe automatic fix (only
+                // the user knows the hinge side / where the blocker goes),
+                // so the button is hidden instead of doing nothing.
+                if (issue.code != ErgonomicRuleCode.DOOR_SWING_ARC_COLLISION &&
+                    issue.code != ErgonomicRuleCode.DRAWER_PULL_OUT_BLOCKED
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Build,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("تصحيح تلقائي", fontSize = 11.sp)
+                    Button(
+                        onClick = onAutoFixClick,
+                        modifier = Modifier
+                            .height(34.dp)
+                            .testTag("autofix_issue_button_${issue.code.name.lowercase()}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                        contentPadding = ButtonDefaults.TextButtonContentPadding
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("تصحيح تلقائي", fontSize = 11.sp)
+                    }
                 }
             }
         }

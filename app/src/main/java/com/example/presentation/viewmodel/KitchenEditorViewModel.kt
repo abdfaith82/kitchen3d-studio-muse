@@ -2990,6 +2990,14 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         val elements = currentProject.elements.toMutableList()
 
         when (issue.code) {
+            ErgonomicRuleCode.DOOR_SWING_ARC_COLLISION,
+            ErgonomicRuleCode.DRAWER_PULL_OUT_BLOCKED -> {
+                // v1.15 — no safe automatic fix: only the user knows which
+                // side the door is hinged on, or where the blocking unit
+                // should go. The issue stays actionable by moving a unit
+                // by hand; the overlap guarantee below still runs.
+            }
+
             ErgonomicRuleCode.SINK_TOO_FAR_FROM_STOVE,
             ErgonomicRuleCode.SINK_TOO_CLOSE_TO_STOVE -> {
                 if (issue.affectedElementIds.size >= 2) {
