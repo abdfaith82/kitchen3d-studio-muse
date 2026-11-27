@@ -2340,9 +2340,51 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 
     fun loadTemplate(templateId: String) {
         viewModelScope.launch {
-            repository.loadTemplate(templateId)
-            commandHistory.clear()
-            _uiState.update { it.copy(selectedElementIds = emptySet(), activeDialog = null) }
+            // v1.14 — a template used to wipe the kitchen with no warning and
+            // no way back (commandHistory.clear()). It is now an undoable
+            // replacement, mirroring applyImportedProject (v1.12 P0-1): the
+            // old room + elements become two undo commands, and the
+            // confirmation dialog lives in KitchenStudioScreen.
+            val oldProject = _uiState.value.project
+            val oldSelection = _uiState.value.selectedElementIds
+            val template = repository.getSampleTemplates().find { it.id == templateId } ?: return@launch
+            val nonOverlappingElements = CollisionDetector.resolveAllSceneOverlaps(template.elements, template.room)
+            val safeTemplate = template.copy(elements = nonOverlappingElements)
+            repository.updateProject(safeTemplate)
+            _uiState.update {
+                it.copy(
+                    project = safeTemplate,
+                    selectedElementIds = emptySet(),
+                    activeDialog = null
+                )
+            }
+            if (oldProject.room != safeTemplate.room) {
+                commandHistory.execute(
+                    ModifyRoomLayoutCommand(
+                        oldRoom = oldProject.room,
+                        newRoom = safeTemplate.room,
+                        title = "تطبيق نموذج جاهز (الغرفة)",
+                        description = "${safeTemplate.room.widthMm.toInt()}×${safeTemplate.room.depthMm.toInt()} مم (${safeTemplate.room.layoutShape.titleAr})",
+                        onApplyRoom = { room ->
+                            _uiState.update { it.copy(project = it.project.copy(room = room)) }
+                        }
+                    )
+                )
+            }
+            commandHistory.execute(
+                BatchFloorPlanLayoutCommand(
+                    beforeElements = oldProject.elements,
+                    afterElements = safeTemplate.elements,
+                    beforeSelection = oldSelection,
+                    afterSelection = emptySet(),
+                    title = "تطبيق نموذج جاهز (${safeTemplate.elements.size} وحدة)",
+                    description = "استبدال ${oldProject.elements.size} وحدة بنموذج «${safeTemplate.name}»",
+                    category = CommandCategory.FLOORPLAN_TRANSFORM,
+                    onApplyElements = { elems, sel ->
+                        _uiState.update { it.copy(project = it.project.copy(elements = elems), selectedElementIds = sel) }
+                    }
+                )
+            )
         }
     }
 

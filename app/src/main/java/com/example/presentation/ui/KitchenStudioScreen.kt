@@ -63,6 +63,8 @@ fun KitchenStudioScreen(
         }
     }
     var showTemplatesDialog by remember { mutableStateOf(false) }
+    // v1.14 — the template waiting for confirmation (id + title).
+    var pendingTemplate by remember { mutableStateOf<Pair<String, String>?>(null) }
     var exportStudioInitialTab by remember { mutableStateOf(ExportTab.PDF_BLUEPRINT) }
 
     // External Menu Drag-and-Drop State (from Sidebar or Top Visual Bar directly into 3D/2D Workspace)
@@ -1604,46 +1606,71 @@ fun KitchenStudioScreen(
                         title = "مطبخ ملكي مزدوج للتاج مع فيترينة ونيش LED",
                         desc = "خزائن تاج للسقف، عمود 4 فتحات نيش مضاءة، فيترينة زجاج أسود وبرج فرن",
                         onClick = {
-                            viewModel.loadTemplate("template_l_shape")
-                            showTemplatesDialog = false
+                            pendingTemplate = "template_l_shape" to "مطبخ ملكي مزدوج للتاج مع فيترينة ونيش LED"
                         }
                     )
                     TemplateItem(
                         title = "مطبخ شامبين أكريليك مع بار مضاء وفيترينة LED",
                         desc = "خزائن شامبين لامعة، تاج زجاجي مضاء، بار بفتحات نيش وإضاءة سقف خطية",
                         onClick = {
-                            viewModel.loadTemplate("template_luxury_vitrine")
-                            showTemplatesDialog = false
+                            pendingTemplate = "template_luxury_vitrine" to "مطبخ شامبين أكريليك مع بار مضاء وفيترينة LED"
                         }
                     )
                     TemplateItem(
                         title = "مطبخ الجزيرة الفاخر (Chef's Island)",
                         desc = "جزيرة وسطية رخامية مع أبراج مؤونة وفرن مدمج",
                         onClick = {
-                            viewModel.loadTemplate("template_island")
-                            showTemplatesDialog = false
+                            pendingTemplate = "template_island" to "مطبخ الجزيرة الفاخر (Chef's Island)"
                         }
                     )
                     TemplateItem(
                         title = "مطبخ متكامل شكل U-Shape",
                         desc = "مثلث حركة مريح مع استغلال أمثل للجدران",
                         onClick = {
-                            viewModel.loadTemplate("template_u_shape")
-                            showTemplatesDialog = false
+                            pendingTemplate = "template_u_shape" to "مطبخ متكامل شكل U-Shape"
                         }
                     )
                     TemplateItem(
                         title = "مطبخ خطي للشقق (Linear Studio)",
                         desc = "مطبخ أنيق على جدار واحد بمظهر ناعم وعصري",
                         onClick = {
-                            viewModel.loadTemplate("template_linear")
-                            showTemplatesDialog = false
+                            pendingTemplate = "template_linear" to "مطبخ خطي للشقق (Linear Studio)"
                         }
                     )
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showTemplatesDialog = false }) {
+                    Text("إلغاء")
+                }
+            },
+            containerColor = Color(0xFF0F172A),
+            textContentColor = Color.White,
+            titleContentColor = Color.White
+        )
+    }
+
+    // v1.14 — applying a template replaces the whole kitchen, so confirm
+    // first. (It is undoable afterwards via the Undo button as well.)
+    if (pendingTemplate != null) {
+        AlertDialog(
+            onDismissRequest = { pendingTemplate = null },
+            title = { Text("تطبيق نموذج جاهز؟", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("سيستبدل نموذج «${pendingTemplate!!.second}» مطبخك الحالي بالكامل (الغرفة والخزائن). يمكنك التراجع عنه فوراً من زر التراجع ↩️.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val (templateId, _) = pendingTemplate!!
+                    pendingTemplate = null
+                    showTemplatesDialog = false
+                    viewModel.loadTemplate(templateId)
+                }) {
+                    Text("تطبيق النموذج")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingTemplate = null }) {
                     Text("إلغاء")
                 }
             },

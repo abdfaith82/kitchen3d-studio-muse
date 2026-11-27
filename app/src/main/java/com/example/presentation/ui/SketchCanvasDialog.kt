@@ -1008,7 +1008,15 @@ fun SketchCanvasDialog(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             sketchCanvasPane(Modifier.weight(1f).fillMaxWidth())
-                            sketchPreviewPane(Modifier.fillMaxWidth().height(180.dp))
+                            // v1.14 — the preview pane used to take a fixed
+                            // 180dp even when its toggle was OFF (it rendered
+                            // nothing, but the space was still reserved), so
+                            // the sketch board stayed small. Only place it
+                            // when the live preview is actually on, and the
+                            // canvas takes the whole main area otherwise.
+                            if (showLive3DSplitPreview) {
+                                sketchPreviewPane(Modifier.fillMaxWidth().height(180.dp))
+                            }
                         }
                     } else {
                         Row(
@@ -1016,7 +1024,9 @@ fun SketchCanvasDialog(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             sketchCanvasPane(Modifier.weight(if (showLive3DSplitPreview) 1.35f else 1f).fillMaxHeight())
-                            sketchPreviewPane(Modifier.weight(0.95f).fillMaxHeight())
+                            if (showLive3DSplitPreview) {
+                                sketchPreviewPane(Modifier.weight(0.95f).fillMaxHeight())
+                            }
                         }
                     }
                 }
