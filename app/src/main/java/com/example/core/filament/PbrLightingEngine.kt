@@ -225,9 +225,28 @@ data class CameraExposure(
     /**
      * Filament photometric exposure multiplier:
      * scale = 1.0 / (1.2 * 2^EV100)
+     * Kept for reference only — the CPU ray tracer must NOT use it (see
+     * [displayScale]): it expects true physical radiance, while the
+     * tracer's light terms are display-referred.
      */
     val exposureMultiplier: Float
         get() = 1.0f / (1.2f * 2.0f.pow(ev100)).coerceAtLeast(1e-6f)
+
+    /**
+     * Display-referred scale for the CPU ray tracer (v1.12): the tracer's
+     * light terms are display-referred (sun ≈ lux/10000, ambient ≈ 1), NOT
+     * physical radiance, so the Filament photometric [exposureMultiplier]
+     * (≈0.0009 at f/4, 1/60, ISO 100) crushed every render to near-black
+     * (a sunlit white wall landed at ~1/255 after ACES). Instead the image
+     * is scaled relative to the default camera settings (f/4, 1/60,
+     * ISO 100 → 1.0), and aperture / shutter / ISO / EV-compensation
+     * brighten or darken from there, exactly as a photographer expects.
+     */
+    val displayScale: Float
+        get() {
+            val referenceEv100 = CameraExposure().ev100
+            return 2.0f.pow(referenceEv100 - ev100)
+        }
 
     /**
      * ACES (Academy Color Encoding System) filmic tone mapping curve.

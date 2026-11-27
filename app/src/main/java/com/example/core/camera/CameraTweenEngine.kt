@@ -69,7 +69,11 @@ object CameraTweenEngine {
         val t = easing(progress.coerceIn(0f, 1f))
 
         return CameraPose(
-            mode = if (progress >= 0.5f) target.mode else start.mode,
+            // v1.12 (P1-19) — the mode used to flip at progress 0.5, but orbit
+            // and walk compute the eye from different sources, so the view
+            // teleported mid-glide. The mode now stays the start mode for the
+            // whole tween and only the final state applies the target mode.
+            mode = if (progress >= 1f) target.mode else start.mode,
             eyePosition = start.eyePosition.lerp(target.eyePosition, t),
             targetCenter = start.targetCenter.lerp(target.targetCenter, t),
             yawDegrees = lerpAngleDegrees(start.yawDegrees, target.yawDegrees, t),
@@ -78,6 +82,30 @@ object CameraTweenEngine {
             panOffset = start.panOffset.lerp(target.panOffset, t),
             eyeHeightMm = lerp(start.eyeHeightMm, target.eyeHeightMm, t)
         )
+    }
+
+    /**
+     * The orbit eye position for a given yaw/pitch/zoom/pan — the exact
+     * formula Viewport3D uses to derive the eye in orbit mode (v1.12).
+     * Preset tweens carry a correct eye from here instead of the stale
+     * walk-camera position, so orbit↔walk glides no longer teleport.
+     */
+    fun orbitEyeFor(
+        room: RoomStructure,
+        yawDegrees: Float,
+        pitchDegrees: Float,
+        zoomFactor: Float,
+        panOffset: Vector3
+    ): Vector3 {
+        val roomCenter = Vector3(room.widthMm * 0.5f, room.heightMm * 0.34f, room.depthMm * 0.5f)
+        val yawRad = Math.toRadians(yawDegrees.toDouble()).toFloat()
+        val pitchRad = Math.toRadians(pitchDegrees.toDouble()).toFloat()
+        val distance = (max(room.widthMm, room.depthMm) * 1.38f) / zoomFactor.coerceAtLeast(0.05f)
+        val target = roomCenter + Vector3(panOffset.x, panOffset.y * 0.6f, 0f)
+        val eyeX = target.x + distance * cos(pitchRad) * sin(yawRad)
+        val eyeY = (target.y + distance * sin(pitchRad)).coerceAtLeast(180f)
+        val eyeZ = target.z + distance * cos(pitchRad) * cos(yawRad)
+        return Vector3(eyeX, eyeY, eyeZ)
     }
 
     /**
@@ -91,7 +119,7 @@ object CameraTweenEngine {
     ): CameraPose {
         val roomCenter = Vector3(room.widthMm * 0.5f, room.heightMm * 0.35f, room.depthMm * 0.5f)
 
-        return when (preset) {
+        val pose = when (preset) {
             CameraNavigationPreset.PERSPECTIVE -> CameraPose(
                 mode = CameraMode.ORBIT,
                 targetCenter = roomCenter,
@@ -159,6 +187,17 @@ object CameraTweenEngine {
                     computePresetPose(CameraNavigationPreset.PERSPECTIVE, room, null, currentPose)
                 }
             }
+        }
+        // v1.12 (P1-19) — orbit presets used to carry the default eyePosition
+        // (2500, 1600, 2500), which the tween then lerped toward while the
+        // viewport ignored it — hence the jump at the mode flip. The pose now
+        // carries the eye the viewport will actually render at the target.
+        return if (pose.mode == CameraMode.FIRST_PERSON_WALK) {
+            pose
+        } else {
+            pose.copy(
+                eyePosition = orbitEyeFor(room, pose.yawDegrees, pose.pitchDegrees, pose.zoomFactor, pose.panOffset)
+            )
         }
     }
 }

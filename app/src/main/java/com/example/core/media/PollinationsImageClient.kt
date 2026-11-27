@@ -20,6 +20,22 @@ import kotlinx.coroutines.withContext
  * be slow or briefly unavailable; the dialog reports that in Arabic.
  */
 object PollinationsImageClient {
+
+    /**
+     * v1.12 (P1-10) — a bare HTTP code ("500") used to reach the user with no
+     * meaning. The code is now mapped to Arabic; the raw code goes to Logcat.
+     */
+    private fun arabicHttpError(code: Int): Nothing {
+        android.util.Log.e("Pollinations", "image HTTP $code")
+        error(
+            when (code) {
+                401, 403 -> "خدمة الصور ترفض الطلب الآن — حاول لاحقاً"
+                429 -> "خدمة الصور مشغولة — حاول مجدداً بعد قليل"
+                500, 502, 503 -> "خدمة الصور غير متاحة الآن — حاول لاحقاً"
+                else -> "تعذّر توليد الصورة (رمز $code)"
+            }
+        )
+    }
     const val LEGACY_BASE = "https://image.pollinations.ai"
     const val BASE = "https://gen.pollinations.ai"
     const val DEFAULT_MODEL = "flux"
@@ -67,9 +83,9 @@ object PollinationsImageClient {
             val code = download(buildImageUrl(prompt, width, height, seed), null)
             if (code == 401 && key.isNotBlank()) {
                 val code2 = download(buildImageUrl(prompt, width, height, seed, keyed = true), key)
-                if (code2 !in 200..299) error("$code2")
+                if (code2 !in 200..299) arabicHttpError(code2)
             } else if (code !in 200..299) {
-                error("$code")
+                arabicHttpError(code)
             }
             if (!file.exists() || file.length() < 1024) error("صورة فارغة")
             file

@@ -145,9 +145,13 @@ fun PhotoCabinetDesignerDialog(
                         frontPhotoBitmap = bmp
                         frontPhotoUriStr = it.toString()
                         frontMaterial = extractMaterialFromBitmap(bmp, "خامة الواجهة الأمامية", true)
+                    } else {
+                        // v1.12 (P1-11): a corrupt/unreadable image used to fail silently.
+                        Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (_: Exception) {
+                Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -175,9 +179,13 @@ fun PhotoCabinetDesignerDialog(
                         sidePhotoBitmap = bmp
                         sidePhotoUriStr = it.toString()
                         sideMaterial = extractMaterialFromBitmap(bmp, "خامة الجنب الكامل", false)
+                    } else {
+                        // v1.12 (P1-11): a corrupt/unreadable image used to fail silently.
+                        Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (_: Exception) {
+                Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_LONG).show()
             }
         }
     }

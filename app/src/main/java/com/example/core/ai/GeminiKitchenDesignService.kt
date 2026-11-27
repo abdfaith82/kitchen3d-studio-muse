@@ -313,6 +313,15 @@ class GeminiKitchenDesignService {
             wallFinish = MaterialFinish.WHITE_HIGH_GLOSS
         ).applyLayoutShape(layoutShape)
 
+        // v1.12 (P0-1) — a model reply with no units used to report Success and
+        // then wipe the user's kitchen on Apply, with Undo unable to bring it
+        // back. An empty design is an error, not a success.
+        if (parsedElements.isEmpty()) {
+            return AiDesignUiState.Error(
+                "الذكاء الاصطناعي لم يولّد أي وحدة — جرّب وصفاً أدق للمطبخ (المقاسات والأسلوب) أو أعد المحاولة."
+            )
+        }
+
         val generatedProject = KitchenProject(
             id = "ai_project_${UUID.randomUUID().toString().take(8)}",
             name = proposalTitle,

@@ -50,6 +50,7 @@ import com.example.presentation.ui.RealisticKitchenRenderer3D.renderCeilingAndBa
 import com.example.presentation.ui.RealisticKitchenRenderer3D.renderRealisticFloor
 import com.example.presentation.viewmodel.KitchenEditorUiState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.*
@@ -92,6 +93,13 @@ fun RenderStudioDialog(
     // Active Cinematic Mood Preset (Defaults to V-Ray / Corona 8K Photoreal)
     var activeMoodPreset by remember { mutableStateOf(CinematicMoodPreset.VRAY_CORONA_ARCHITECTURAL_8K) }
 
+    // v1.12 (P1-4) — the last Cinematic Pro setup the user applied. Its lens,
+    // exposure, grain and post values seed this studio instead of being
+    // silently dropped; the mood preset below remains the fallback.
+    val cinematicPost = state.appliedCinematicSettings?.toPostProcessConfig()
+    val cinematicLensFov = state.appliedCinematicSettings?.lens?.verticalFovDeg
+    val cinematicExposureEv = state.appliedCinematicSettings?.exposureEv ?: 0f
+
     // Lighting parameters (synced when a preset is tapped, or fine-tuned manually)
     var sunAzimuth by remember { mutableFloatStateOf(activeMoodPreset.sunAzimuth) }
     var sunElevation by remember { mutableFloatStateOf(activeMoodPreset.sunElevation) }
@@ -108,7 +116,7 @@ fun RenderStudioDialog(
     var previewYaw by remember { mutableFloatStateOf(state.cameraYaw) }
     var previewPitch by remember { mutableFloatStateOf(state.cameraPitch.coerceIn(10f, 45f)) }
     var previewDistanceFactor by remember { mutableFloatStateOf(1.28f) }
-    var previewFovDeg by remember { mutableFloatStateOf(44f) }
+    var previewFovDeg by remember { mutableFloatStateOf(cinematicLensFov ?: 44f) }
     var selectedCameraShot by remember { mutableStateOf(CinematicCameraShot.HERO_EYE_LEVEL) }
 
     var aperture by remember { mutableFloatStateOf(activeMoodPreset.apertureFStop) }
@@ -116,13 +124,14 @@ fun RenderStudioDialog(
     var iso by remember { mutableFloatStateOf(activeMoodPreset.iso) }
     var useAces by remember { mutableStateOf(true) }
 
-    // Cinematic Post-Processing parameters
-    var bloomIntensity by remember { mutableFloatStateOf(activeMoodPreset.postConfig.bloomIntensity) }
-    var vignetteStrength by remember { mutableFloatStateOf(activeMoodPreset.postConfig.vignetteStrength) }
-    var warmthShift by remember { mutableFloatStateOf(activeMoodPreset.postConfig.warmthShift) }
-    var contrastBoost by remember { mutableFloatStateOf(activeMoodPreset.postConfig.contrastBoost) }
-    var cinematicLetterbox by remember { mutableStateOf(activeMoodPreset.postConfig.cinematicLetterbox) }
-    var includeCountertopStaging by remember { mutableStateOf(activeMoodPreset.postConfig.includeCountertopStaging) }
+    // Cinematic Post-Processing parameters (v1.12: seeded from Cinematic Pro when applied)
+    var bloomIntensity by remember { mutableFloatStateOf(cinematicPost?.bloomIntensity ?: activeMoodPreset.postConfig.bloomIntensity) }
+    var vignetteStrength by remember { mutableFloatStateOf(cinematicPost?.vignetteStrength ?: activeMoodPreset.postConfig.vignetteStrength) }
+    var warmthShift by remember { mutableFloatStateOf(cinematicPost?.warmthShift ?: activeMoodPreset.postConfig.warmthShift) }
+    var contrastBoost by remember { mutableFloatStateOf(cinematicPost?.contrastBoost ?: activeMoodPreset.postConfig.contrastBoost) }
+    var cinematicLetterbox by remember { mutableStateOf(cinematicPost?.cinematicLetterbox ?: activeMoodPreset.postConfig.cinematicLetterbox) }
+    var includeCountertopStaging by remember { mutableStateOf(cinematicPost?.includeCountertopStaging ?: activeMoodPreset.postConfig.includeCountertopStaging) }
+    var filmGrain by remember { mutableFloatStateOf(cinematicPost?.filmGrain ?: 0f) }
 
     // Offscreen 4K Render state (Default to UHD_4K so the user gets 4K cinematic output out-of-the-box)
     var selectedResolution by remember { mutableStateOf(RenderResolutionPreset.UHD_4K) }
@@ -130,6 +139,26 @@ fun RenderStudioDialog(
     // the parallel tile renderer pays for its 4x ray cost.
     var enableAntiAliasing by remember { mutableStateOf(true) }
     var isRendering by remember { mutableStateOf(false) }
+    // v1.12 (P1-1) — the running render job, so it can be cancelled.
+    var renderJob by remember { mutableStateOf<Job?>(null) }
+    // v1.12 (P1-2) — the size this device will actually render: the 8K
+    // preset silently falls back to 4K on normal heaps (same rule as the
+    // renderer), so the UI must show the effective size, not the request.
+    val effectiveSize: Pair<Int, Int> = remember(selectedResolution) {
+        val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024L * 1024L)
+        if (selectedResolution == RenderResolutionPreset.UHD_8K_VRAY && maxHeapMb < 1024L) {
+            3840 to 2160
+        } else {
+            selectedResolution.width to selectedResolution.height
+        }
+    }
+    val is8kFallback = selectedResolution == RenderResolutionPreset.UHD_8K_VRAY &&
+        effectiveSize.first < selectedResolution.width
+    fun cancelRender() {
+        renderJob?.cancel()
+        renderJob = null
+        isRendering = false
+    }
     var renderProgress by remember { mutableStateOf<RenderProgress?>(null) }
     var lastRenderResult by remember { mutableStateOf<RenderResult?>(null) }
     var showRenderedOutputView by remember { mutableStateOf(false) }
@@ -153,6 +182,7 @@ fun RenderStudioDialog(
         contrastBoost = preset.postConfig.contrastBoost
         cinematicLetterbox = preset.postConfig.cinematicLetterbox
         includeCountertopStaging = preset.postConfig.includeCountertopStaging
+        filmGrain = preset.postConfig.filmGrain
     }
 
     fun triggerCinematicRender() {
@@ -160,7 +190,11 @@ fun RenderStudioDialog(
         isRendering = true
         renderProgress = null
         gallerySaveStatus = null
-        scope.launch {
+        // v1.12 (P1-1) — keep the Job so the render can be cancelled, and
+        // reset isRendering in finally: a thrown render used to leave the
+        // dialog permanently locked (no close, no retry).
+        renderJob = scope.launch {
+            try {
             val room = state.project.room
             val elements = state.project.elements.filter { it.isVisible }
 
@@ -186,6 +220,7 @@ fun RenderStudioDialog(
                 apertureFNumber = aperture,
                 shutterSpeedSeconds = 1.0f / shutterSpeedFrac,
                 iso = iso,
+                evCompensation = cinematicExposureEv,
                 useAcesToneMapping = useAces
             )
 
@@ -202,7 +237,8 @@ fun RenderStudioDialog(
                 warmthShift = warmthShift,
                 contrastBoost = contrastBoost,
                 cinematicLetterbox = cinematicLetterbox,
-                includeCountertopStaging = includeCountertopStaging
+                includeCountertopStaging = includeCountertopStaging,
+                filmGrain = filmGrain
             )
 
             val res = OffscreenRenderer4K.renderScene(
@@ -225,12 +261,16 @@ fun RenderStudioDialog(
             )
             lastRenderResult = res
             showRenderedOutputView = true
-            isRendering = false
+            } finally {
+                isRendering = false
+            }
         }
     }
 
     Dialog(
-        onDismissRequest = { if (!isRendering) onDismiss() },
+        // v1.12 (P1-1) — dismissing during a render cancels it instead of
+        // trapping the user until a minutes-long 8K render finishes.
+        onDismissRequest = { cancelRender(); onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -271,7 +311,7 @@ fun RenderStudioDialog(
                                     color = Color.White
                                 )
                                 Text(
-                                    "حفاظ صارم على الأبعاد • خامات PBR واقعية • إضاءة GI شاملة وإكسسوارات رخامة",
+                                    "حفاظ صارم على الأبعاد • خامات PBR واقعية • إضاءة محيطة وظلال شمس ناعمة وإكسسوارات رخامة",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFF94A3B8),
                                     fontSize = 11.sp
@@ -281,8 +321,7 @@ fun RenderStudioDialog(
                     },
                     navigationIcon = {
                         IconButton(
-                            onClick = onDismiss,
-                            enabled = !isRendering,
+                            onClick = { cancelRender(); onDismiss() },
                             modifier = Modifier.testTag("close_render_studio_btn")
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color.White)
@@ -290,10 +329,16 @@ fun RenderStudioDialog(
                     },
                     actions = {
                         AssistChip(
-                            onClick = {},
+                            // v1.12 — the chip used to be a dead button showing the
+                            // requested size; it now shows the effective render size
+                            // and taps cycle through the resolutions.
+                            onClick = {
+                                val all = RenderResolutionPreset.entries
+                                selectedResolution = all[(all.indexOf(selectedResolution) + 1) % all.size]
+                            },
                             label = {
                                 Text(
-                                    "${selectedResolution.width}×${selectedResolution.height}",
+                                    "${effectiveSize.first}×${effectiveSize.second}",
                                     fontSize = 11.sp,
                                     color = Color(0xFF38BDF8),
                                     fontWeight = FontWeight.Bold
@@ -394,7 +439,14 @@ fun RenderStudioDialog(
                             gallerySaveStatus = gallerySaveStatus,
                             onSaveToGallery = { bitmap ->
                                 scope.launch {
-                                    val savedMsg = saveRenderBitmapToGallery(context, bitmap, selectedResolution)
+                                    // v1.12 (P1-2) — name the file with the size that was
+                                    // actually rendered, not the requested preset.
+                                    val savedMsg = saveRenderBitmapToGallery(
+                                        context,
+                                        bitmap,
+                                        lastRenderResult?.width ?: selectedResolution.width,
+                                        lastRenderResult?.height ?: selectedResolution.height
+                                    )
                                     gallerySaveStatus = savedMsg
                                 }
                             }
@@ -463,7 +515,7 @@ fun RenderStudioDialog(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "جاري إخراج الصورة السينمائية (${selectedResolution.width}×${selectedResolution.height})...",
+                                    text = "جاري إخراج الصورة السينمائية (${effectiveSize.first}×${effectiveSize.second})...",
                                     color = Color(0xFFFBBF24),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
@@ -491,68 +543,90 @@ fun RenderStudioDialog(
                                 color = Color(0xFF94A3B8),
                                 fontSize = 11.sp
                             )
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = ::cancelRender,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("cancel_render_button"),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFCA5A5))
                             ) {
-                                // Resolution quick selector pills
-                                RenderResolutionPreset.entries.forEach { preset ->
-                                    val isSelected = selectedResolution == preset
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (isSelected) Color(0xFF1E3A8A) else Color(0xFF1E293B),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155)
-                                        ),
-                                        modifier = Modifier
-                                            .clickable { selectedResolution = preset }
-                                            .testTag("select_res_${preset.name.lowercase()}")
-                                    ) {
-                                        Text(
-                                            text = when (preset) {
-                                                RenderResolutionPreset.FHD_1080P -> "1080p"
-                                                RenderResolutionPreset.QHD_2K -> "2K QHD"
-                                                RenderResolutionPreset.UHD_4K -> "4K UHD"
-                                                RenderResolutionPreset.UHD_8K_VRAY -> "8K V-Ray"
-                                            },
-                                            color = if (isSelected) Color.White else Color(0xFF94A3B8),
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
-                                        )
+                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("إلغاء الرندر", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        } else {
+                            // v1.12 (P1-12) — the old single row squeezed the render
+                            // button until its label clipped on portrait phones.
+                            // Pills + AA toggle now scroll in their own row, and the
+                            // render button gets a full-width row of its own.
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                LazyRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Resolution quick selector pills
+                                    items(RenderResolutionPreset.entries) { preset ->
+                                        val isSelected = selectedResolution == preset
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (isSelected) Color(0xFF1E3A8A) else Color(0xFF1E293B),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (isSelected) Color(0xFF38BDF8) else Color(0xFF334155)
+                                            ),
+                                            modifier = Modifier
+                                                .clickable { selectedResolution = preset }
+                                                .testTag("select_res_${preset.name.lowercase()}")
+                                        ) {
+                                            Text(
+                                                text = when (preset) {
+                                                    RenderResolutionPreset.FHD_1080P -> "1080p"
+                                                    RenderResolutionPreset.QHD_2K -> "2K QHD"
+                                                    RenderResolutionPreset.UHD_4K -> "4K UHD"
+                                                    RenderResolutionPreset.UHD_8K_VRAY -> "8K V-Ray"
+                                                },
+                                                color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                                            )
+                                        }
+                                    }
+                                    // v1.11: anti-aliasing toggle (2x2 supersampling)
+                                    item {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (enableAntiAliasing) Color(0xFF1E3A8A) else Color(0xFF1E293B),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (enableAntiAliasing) Color(0xFF38BDF8) else Color(0xFF334155)
+                                            ),
+                                            modifier = Modifier
+                                                .clickable { enableAntiAliasing = !enableAntiAliasing }
+                                                .testTag("toggle_render_aa")
+                                        ) {
+                                            Text(
+                                                text = if (enableAntiAliasing) "تنعيم الحواف ✓" else "تنعيم الحواف",
+                                                color = if (enableAntiAliasing) Color.White else Color(0xFF94A3B8),
+                                                fontSize = 11.sp,
+                                                fontWeight = if (enableAntiAliasing) FontWeight.Bold else FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                                            )
+                                        }
                                     }
                                 }
 
-                                // v1.11: anti-aliasing toggle (2x2 supersampling)
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (enableAntiAliasing) Color(0xFF1E3A8A) else Color(0xFF1E293B),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        if (enableAntiAliasing) Color(0xFF38BDF8) else Color(0xFF334155)
-                                    ),
-                                    modifier = Modifier
-                                        .clickable { enableAntiAliasing = !enableAntiAliasing }
-                                        .testTag("toggle_render_aa")
-                                ) {
-                                    Text(
-                                        text = if (enableAntiAliasing) "تنعيم الحواف ✓" else "تنعيم الحواف",
-                                        color = if (enableAntiAliasing) Color.White else Color(0xFF94A3B8),
-                                        fontSize = 11.sp,
-                                        fontWeight = if (enableAntiAliasing) FontWeight.Bold else FontWeight.Medium,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
-                                    )
-                                }
-
-                                // Primary 4K Cinematic Render Button
+                                // Primary 4K Cinematic Render Button (full width)
                                 Button(
                                     onClick = ::triggerCinematicRender,
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .height(46.dp)
+                                        .fillMaxWidth()
+                                        .height(48.dp)
                                         .testTag("start_4k_render_button"),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(
@@ -563,9 +637,17 @@ fun RenderStudioDialog(
                                     Icon(Icons.Default.CameraEnhance, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "إخراج صورة سينمائية (${selectedResolution.width}×${selectedResolution.height})",
+                                        text = "إخراج صورة سينمائية (${effectiveSize.first}×${effectiveSize.second})",
                                         fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 12.sp
+                                        fontSize = 13.sp
+                                    )
+                                }
+                                // v1.12 (P1-2) — say plainly when 8K falls back to 4K.
+                                if (is8kFallback) {
+                                    Text(
+                                        text = "ذاكرة هذا الجهاز لا تسمح برندر 8K كامل — سيُخرج بدقة 4K.",
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.sp
                                     )
                                 }
                             }
@@ -1295,10 +1377,11 @@ private fun LiveCinematicPreviewCanvas(
 private suspend fun saveRenderBitmapToGallery(
     context: Context,
     bitmap: Bitmap,
-    preset: RenderResolutionPreset
+    actualWidth: Int,
+    actualHeight: Int
 ): String = withContext(Dispatchers.IO) {
     try {
-        val fileName = "Kitchen3D_Cinematic_${preset.width}x${preset.height}_${System.currentTimeMillis()}.png"
+        val fileName = "Kitchen3D_Cinematic_${actualWidth}x${actualHeight}_${System.currentTimeMillis()}.png"
         val resolver = context.contentResolver
         val contentValues = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)

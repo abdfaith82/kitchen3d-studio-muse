@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import android.graphics.Paint
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,16 +54,21 @@ import com.example.core.sketch.SketchTo3DEngine
 import com.example.core.sketch.StrokeType
 import com.example.domain.model.KitchenElement
 import com.example.domain.model.RoomStructure
+import com.example.presentation.viewmodel.KitchenEditorViewModel
 import kotlin.math.*
 
 @Composable
 fun SketchCanvasDialog(
     onApplyGeneratedRoom: (RoomStructure) -> Unit,
     onApplyGeneratedScene: ((RoomStructure, List<KitchenElement>) -> Unit)? = null,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    // v1.12 (P0-2) — the ViewModel holds the sketch so it survives rotation.
+    viewModel: KitchenEditorViewModel
 ) {
     val context = LocalContext.current
-    var strokes by remember { mutableStateOf(listOf<DrawnStroke>()) }
+    // v1.12 (P0-2) — restore the sketch from the ViewModel on first
+    // composition (after a rotation) instead of starting empty.
+    var strokes by remember { mutableStateOf(viewModel.sketchStrokes.value) }
     var currentStrokePoints by remember { mutableStateOf(listOf<Offset>()) }
     var activeStrokeType by remember { mutableStateOf(StrokeType.WALL) }
 
@@ -75,7 +81,7 @@ fun SketchCanvasDialog(
 
     // Calibration state
     var isCalibrating by remember { mutableStateOf(false) }
-    var calibrationMarker by remember { mutableStateOf<CalibrationMarker?>(null) }
+    var calibrationMarker by remember { mutableStateOf(viewModel.sketchCalibrationMarker.value) }
     var calibrationKnownDistanceMm by remember { mutableFloatStateOf(1000f) }
 
     // Selected stroke for exact numeric length editing (like Room Planner / الفن الدمشقي)
@@ -83,7 +89,7 @@ fun SketchCanvasDialog(
     var customLengthCmInput by remember { mutableStateOf("") }
 
     // Optional background imported or camera-captured blueprint bitmap
-    var backgroundBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var backgroundBitmap by remember { mutableStateOf(viewModel.sketchBackgroundBitmap.value) }
     var canvasSize by remember { mutableStateOf(Offset(800f, 600f)) }
 
     // Live 3D conversion result updated immediately whenever strokes change
@@ -115,16 +121,34 @@ fun SketchCanvasDialog(
         }
     }
 
+    // v1.12 (P0-2) — mirror the sketch into the ViewModel on every change so
+    // a rotation restores it; dismissing the dialog clears the mirror.
+    LaunchedEffect(strokes, calibrationMarker, backgroundBitmap) {
+        viewModel.updateSketchState(strokes, calibrationMarker, backgroundBitmap)
+    }
+
+    fun dismissSketch() {
+        viewModel.clearSketchState()
+        onDismiss()
+    }
+
     // Zero-permission Photo Picker for importing floorplan images
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         uri?.let {
             try {
-                context.contentResolver.openInputStream(it)?.use { stream ->
-                    backgroundBitmap = BitmapFactory.decodeStream(stream)
+                val bmp = context.contentResolver.openInputStream(it)?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+                if (bmp != null) {
+                    backgroundBitmap = bmp
+                } else {
+                    // v1.12 (P1-11) — a corrupt/unreadable pick used to fail silently.
+                    Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_SHORT).show()
                 }
             } catch (_: Exception) {
+                Toast.makeText(context, "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -159,7 +183,7 @@ fun SketchCanvasDialog(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = ::dismissSketch,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -448,21 +472,34 @@ fun SketchCanvasDialog(
                             .border(1.dp, Color(0xFF1E3A5F), RoundedCornerShape(14.dp))
                             .pointerInput(canvasSize) {
                                 detectTapGestures { tapOffset ->
-                                    // Tap near an existing stroke to edit its exact length in cm
-                                    val hit = strokes.minByOrNull { st ->
-                                        val s = st.start ?: return@minByOrNull Float.MAX_VALUE
-                                        val e = st.end ?: return@minByOrNull Float.MAX_VALUE
-                                        val mid = Offset((s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f)
-                                        (mid - tapOffset).getDistance()
+                                    // v1.12 (P1-15) — tap-to-edit now measures the distance to
+                                    // the stroke itself (any point on any segment), not only to
+                                    // its midpoint, so tapping near either end works.
+                                    fun pointToSegmentDistance(p: Offset, a: Offset, b: Offset): Float {
+                                        val abX = b.x - a.x
+                                        val abY = b.y - a.y
+                                        val lenSq = abX * abX + abY * abY
+                                        if (lenSq <= 0f) return (p - a).getDistance()
+                                        val t = (((p.x - a.x) * abX + (p.y - a.y) * abY) / lenSq).coerceIn(0f, 1f)
+                                        return (p - Offset(a.x + abX * t, a.y + abY * t)).getDistance()
                                     }
-                                    if (hit != null && hit.start != null && hit.end != null) {
-                                        val mid = Offset((hit.start!!.x + hit.end!!.x) * 0.5f, (hit.start!!.y + hit.end!!.y) * 0.5f)
-                                        if ((mid - tapOffset).getDistance() <= 55f) {
-                                            selectedStrokeId = hit.id
-                                            val scale = calibrationMarker?.mmPerPixel ?: (4200f / max(300f, canvasSize.x * 0.68f))
-                                            val mm = hit.customLengthMmOverride ?: (hit.lengthPx * scale)
-                                            customLengthCmInput = (mm / 10f).roundToInt().toString()
+                                    fun strokeDistance(p: Offset, st: DrawnStroke): Float {
+                                        val pts = st.points
+                                        if (pts.size < 2) return Float.MAX_VALUE
+                                        var best = Float.MAX_VALUE
+                                        for (i in 0 until pts.size - 1) {
+                                            val d = pointToSegmentDistance(p, pts[i], pts[i + 1])
+                                            if (d < best) best = d
                                         }
+                                        return best
+                                    }
+                                    val hit = strokes.minByOrNull { st -> strokeDistance(tapOffset, st) }
+                                    val hitDist = hit?.let { strokeDistance(tapOffset, it) } ?: Float.MAX_VALUE
+                                    if (hit != null && hitDist <= 55f) {
+                                        selectedStrokeId = hit.id
+                                        val scale = calibrationMarker?.mmPerPixel ?: (4200f / max(300f, canvasSize.x * 0.68f))
+                                        val mm = hit.customLengthMmOverride ?: (hit.lengthPx * scale)
+                                        customLengthCmInput = (mm / 10f).roundToInt().toString()
                                     }
                                 }
                             }
@@ -1002,7 +1039,7 @@ fun SketchCanvasDialog(
                         } else {
                             onApplyGeneratedRoom(res.room)
                         }
-                        onDismiss()
+                        dismissSketch()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                     modifier = Modifier

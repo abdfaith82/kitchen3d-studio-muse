@@ -88,7 +88,9 @@ fun ProjectsManagerDialog(
                                 )
                             }
                         }
-                        Column {
+                        // v1.12 — the title Column had no weight, so on narrow
+                        // phones the long title squeezed the close button off-screen.
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "إدارة المشاريع والمزامنة السحابية (Firestore & Room)",
                                 fontWeight = FontWeight.Bold,
@@ -162,7 +164,10 @@ fun ProjectsManagerDialog(
                                     // Quick Export JSON Button
                                     Button(
                                         onClick = {
-                                            viewModel.exportAndShareProjectJson(context)
+                                            viewModel.exportAndShareProjectJson(
+                                                context,
+                                                onFailure = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+                                            )
                                             Toast.makeText(context, "جاري تصدير ومشاركة ملف JSON...", Toast.LENGTH_SHORT).show()
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
@@ -566,7 +571,11 @@ fun ProjectsManagerDialog(
                                     Toast.makeText(context, "تم فتح المشروع '${projectMeta.name}'", Toast.LENGTH_SHORT).show()
                                 },
                                 onExportJson = {
-                                    viewModel.exportAndShareProjectJson(context, projectMeta.id)
+                                    viewModel.exportAndShareProjectJson(
+                                        context,
+                                        projectMeta.id,
+                                        onFailure = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+                                    )
                                     Toast.makeText(context, "جاري تصدير المشروع '${projectMeta.name}' كملف JSON...", Toast.LENGTH_SHORT).show()
                                 },
                                 onDelete = {

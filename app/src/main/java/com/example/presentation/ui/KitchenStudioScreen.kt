@@ -728,6 +728,7 @@ fun KitchenStudioScreen(
                     Viewport2D(
                         state = state,
                         onSelectElement = { id -> viewModel.selectElement(id) },
+                        onClearSelection = { viewModel.clearSelection() },
                         onMoveSelected = { dx, dy, dz -> viewModel.moveSelected(dx, dy, dz) },
                         onMoveElementToPosition = { id, targetPos, stepMm ->
                             viewModel.moveElementToTargetPosition(id, targetPos, snapStepMm = stepMm)
@@ -1339,7 +1340,8 @@ fun KitchenStudioScreen(
                 onApplyGeneratedScene = { newRoom, sketchedElements ->
                     viewModel.applySketchScene(newRoom, sketchedElements)
                 },
-                onDismiss = { viewModel.openDialog(null) }
+                onDismiss = { viewModel.openDialog(null) },
+                viewModel = viewModel
             )
         }
         is ActiveDialog.PerspectiveOverlay -> {

@@ -44,14 +44,21 @@ object MagicHourKeyStore {
         }
     }
 
-    fun saveApiKey(context: Context, key: String) {
-        try {
+    /**
+     * v1.12 (P2-1) — returns whether the key was actually stored, so the
+     * dialog never claims "saved ✓" when the KeyStore write failed
+     * (same shape as AiApiKeyStore.saveApiKey).
+     */
+    fun saveApiKey(context: Context, key: String): Boolean {
+        return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, loadOrCreateKey())
             val enc = Base64.encodeToString(cipher.doFinal(key.toByteArray(Charsets.UTF_8)), Base64.DEFAULT)
             val iv = Base64.encodeToString(cipher.iv, Base64.DEFAULT)
             prefs(context).edit().putString(ENCRYPTED_KEY, enc).putString(IV_KEY, iv).apply()
+            true
         } catch (_: Exception) {
+            false
         }
     }
 

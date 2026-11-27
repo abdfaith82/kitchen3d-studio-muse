@@ -1,5 +1,15 @@
 package com.example.presentation.ui
 
+/**
+ * v1.12 (P1-10) — export/import failures used to reach the user as raw
+ * English exception text ("خطأ: JSONException ..."). The detail goes to
+ * Logcat; the user sees a fixed Arabic message with a retry hint.
+ */
+private fun exportFailureMessage(operation: String, e: Exception): String {
+    android.util.Log.e("ExportStudio", "$operation failed", e)
+    return "تعذّر $operation — تحقق من مساحة التخزين وحاول مجدداً."
+}
+
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -95,9 +105,13 @@ fun ExportStudioDialog(
                     if (bmp != null) {
                         viewModel.updateWorkshopBranding(workshopNameText, bmp)
                         exportStatusMessage = "تمت إضافة شعار الورشة للمخطط التنفيذي بنجاح"
+                    } else {
+                        // v1.12 (P1-11): a corrupt/unreadable image used to fail silently.
+                        exportStatusMessage = "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى"
                     }
                 }
             } catch (_: Exception) {
+                exportStatusMessage = "تعذّر قراءة الصورة المختارة — جرّب صورة أخرى"
             }
         }
     }
@@ -115,8 +129,8 @@ fun ExportStudioDialog(
                 exportStatusMessage = "تم استيراد المشروع بنجاح: ${unpacked.project.name} (${unpacked.project.elements.size} وحدة)"
                 Toast.makeText(context, "تم استيراد وقراءة المشروع أوفلاين بنجاح!", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                exportStatusMessage = "خطأ أثناء قراءة الحزمة: ${e.localizedMessage}"
-                Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                exportStatusMessage = exportFailureMessage("قراءة الحزمة", e)
+                Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
             } finally {
                 isProcessing = false
             }
@@ -137,8 +151,8 @@ fun ExportStudioDialog(
                 exportStatusMessage = "تم استيراد ملف وعناصر JSON بنجاح: ${importedProject.name} (${importedProject.elements.size} عنصر)"
                 Toast.makeText(context, "تم استيراد عناصر وبيانات JSON بنجاح!", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                exportStatusMessage = "خطأ أثناء استيراد ملف JSON: ${e.localizedMessage}"
-                Toast.makeText(context, "خطأ JSON: ${e.message}", Toast.LENGTH_LONG).show()
+                exportStatusMessage = exportFailureMessage("استيراد ملف JSON", e)
+                Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
             } finally {
                 isProcessing = false
             }
@@ -200,7 +214,9 @@ fun ExportStudioDialog(
                                 Icon(Icons.Default.Share, contentDescription = null, tint = Color(0xFF38BDF8))
                             }
                         }
-                        Column {
+                        // v1.12 — the title Column had no weight, so on narrow
+                        // phones the long title squeezed the header buttons off-screen.
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "6. نظام استخراج المخطط الهندسي والتنفيذي (2D Blueprint)",
                                 fontSize = 17.sp,
@@ -226,7 +242,7 @@ fun ExportStudioDialog(
                                     val sizeMb = String.format(Locale.US, "%.1f", apkFile.length() / (1024f * 1024f))
                                     exportStatusMessage = "تم استخراج ملف التطبيق Kitchen3DStudio_Release.apk ($sizeMb MB) وجاهز للحفظ والمشاركة"
                                 } catch (e: Exception) {
-                                    exportStatusMessage = "تعذر تصدير ملف الـ APK المباشر: ${e.localizedMessage}"
+                                    exportStatusMessage = exportFailureMessage("تصدير ملف APK", e)
                                 }
                             },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF34D399)),
@@ -337,8 +353,8 @@ fun ExportStudioDialog(
                                             dialogTitle = "إرسال ومشاركة تقرير المشروع PDF عبر تطبيقات المراسلة"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في إنشاء PDF: ${e.localizedMessage}"
-                                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                                        exportStatusMessage = exportFailureMessage("إنشاء ملف PDF", e)
+                                        Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
                                     } finally {
                                         isProcessing = false
                                     }
@@ -363,7 +379,7 @@ fun ExportStudioDialog(
                                             dialogTitle = "مشاركة صورة المخطط التنفيذي للطباعة"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في تصدير صورة المخطط: ${e.localizedMessage}"
+                                        exportStatusMessage = exportFailureMessage("تصدير صورة المخطط", e)
                                     } finally {
                                         isProcessing = false
                                     }
@@ -400,7 +416,7 @@ fun ExportStudioDialog(
                                             roomDimensionsText = dimsText
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ أثناء المشاركة: ${e.localizedMessage}"
+                                        exportStatusMessage = exportFailureMessage("مشاركة الملف", e)
                                     } finally {
                                         isProcessing = false
                                     }
@@ -438,7 +454,7 @@ fun ExportStudioDialog(
                                             roomDimensionsText = dimsText
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ أثناء إعداد البريد: ${e.localizedMessage}"
+                                        exportStatusMessage = exportFailureMessage("إعداد البريد", e)
                                     } finally {
                                         isProcessing = false
                                     }
@@ -469,8 +485,8 @@ fun ExportStudioDialog(
                                             dialogTitle = "مشاركة ملف CAD DXF"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في إنشاء DXF: ${e.localizedMessage}"
-                                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                                        exportStatusMessage = exportFailureMessage("إنشاء ملف DXF", e)
+                                        Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
                                     } finally {
                                         isProcessing = false
                                     }
@@ -501,8 +517,8 @@ fun ExportStudioDialog(
                                             dialogTitle = "مشاركة ملف وعناصر المطبخ JSON"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في تصدير ملف JSON: ${e.localizedMessage}"
-                                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                                        exportStatusMessage = exportFailureMessage("تصدير ملف JSON", e)
+                                        Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
                                     } finally {
                                         isProcessing = false
                                     }
@@ -541,8 +557,8 @@ fun ExportStudioDialog(
                                             dialogTitle = "مشاركة حزمة مشروع المطبخ .room"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في تصدير الحزمة: ${e.localizedMessage}"
-                                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                                        exportStatusMessage = exportFailureMessage("تصدير الحزمة", e)
+                                        Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
                                     } finally {
                                         isProcessing = false
                                     }
@@ -577,8 +593,8 @@ fun ExportStudioDialog(
                                             dialogTitle = "مشاركة صورة المخطط التنفيذي JPG"
                                         )
                                     } catch (e: Exception) {
-                                        exportStatusMessage = "خطأ في تصدير الصورة: ${e.localizedMessage}"
-                                        Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_LONG).show()
+                                        exportStatusMessage = exportFailureMessage("تصدير الصورة", e)
+                                        Toast.makeText(context, exportStatusMessage, Toast.LENGTH_LONG).show()
                                     } finally {
                                         isProcessing = false
                                     }
@@ -1751,7 +1767,7 @@ private fun JsonDataExportSection(
                                         val updatedProj = viewModel.importProjectOrElementsFromJson(editableJsonText)
                                         liveEditFeedback = "تم تطبيق تعديلات JSON بنجاح على ${updatedProj.elements.size} عنصر في المطبخ!"
                                     } catch (e: Exception) {
-                                        liveEditFeedback = "خطأ في صيغة JSON: ${e.localizedMessage}"
+                                        liveEditFeedback = "خطأ في صيغة JSON — راجع الأقواس والفواصل وحاول مجدداً."
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),

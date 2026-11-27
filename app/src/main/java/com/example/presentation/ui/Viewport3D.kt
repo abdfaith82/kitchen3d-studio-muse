@@ -567,7 +567,12 @@ fun Viewport3D(
                 val eyeX = target.x + distance * cos(pitchRad) * sin(yawRad)
                 val eyeY = (target.y + distance * sin(pitchRad)).coerceAtLeast(180f)
                 val eyeZ = target.z + distance * cos(pitchRad) * cos(yawRad)
-                cameraEye = Vector3(eyeX, eyeY, eyeZ)
+                // v1.12 (P1-19) — during a preset glide the tween owns the eye
+                // (the lerped position in walkCameraPosition). The orbit formula
+                // would jump at the mode flip, so the tween eye wins while
+                // tweening; at the end it equals the orbit-derived eye, so the
+                // hand-back is seamless.
+                cameraEye = if (state.isCameraTweening) state.walkCameraPosition else Vector3(eyeX, eyeY, eyeZ)
 
                 val fwd = (target - cameraEye)
                 forward = if (fwd.lengthSquared() > 0.001f) fwd.normalized() else Vector3(0f, 0f, -1f)

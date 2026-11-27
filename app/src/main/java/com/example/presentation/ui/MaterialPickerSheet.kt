@@ -167,6 +167,9 @@ fun MaterialPickerSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        // v1.12 — the sheet used to open only half-expanded, hiding the
+        // finishes list below the fold (same fix as CatalogBottomSheet).
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Color(0xFF0F172A),
         contentColor = Color.White
     ) {

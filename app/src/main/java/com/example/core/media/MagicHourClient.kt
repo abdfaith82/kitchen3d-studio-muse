@@ -26,6 +26,24 @@ object MagicHourClient {
     const val BASE = "https://api.magichour.ai"
     val FREE_MODELS = listOf("wan-2.2", "ltx-2.5", "minimax-h3")
 
+    /**
+     * v1.12 (P1-10) — API failures used to reach the user as raw English JSON
+     * ("401: {\"error\": ...}"). The raw body now goes to Logcat only; the
+     * user sees an Arabic message they can act on.
+     */
+    private fun arabicHttpError(code: Int, raw: String, tag: String): Nothing {
+        android.util.Log.e("MagicHour", "$tag HTTP $code: ${raw.take(500)}")
+        val message = when (code) {
+            401, 403 -> "المفتاح غير صحيح أو منتهٍ — تحقق من مفتاح Magic Hour في الأسفل"
+            402 -> "انتهى الرصيد المجاني (402)"
+            429 -> "تجاوزت الحد المسموح — انتظر قليلاً وحاول مجدداً"
+            400 -> "طلب غير صالح — جرّب صورة أخرى"
+            500, 502, 503 -> "خدمة الفيديو غير متاحة الآن — حاول لاحقاً"
+            else -> "تعذّر الاتصال بخدمة الفيديو (رمز $code)"
+        }
+        error(message)
+    }
+
     /** Pure parser (unit-tested): (upload_url, file_path) from an upload-urls body. */
     fun parseUploadUrlsResponse(raw: String): Pair<String, String> {
         val item = JSONObject(raw).optJSONArray("items")?.optJSONObject(0)
@@ -61,8 +79,7 @@ object MagicHourClient {
                 val code = conn.responseCode
                 val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.use { it.readText() } ?: ""
-                if (code == 402) error("انتهى الرصيد المجاني (402)")
-                if (code !in 200..299) error("$code: ${raw.take(200)}")
+                if (code !in 200..299) arabicHttpError(code, raw, "submit")
                 val id = JSONObject(raw).optString("id")
                 if (id.isBlank()) error("رد بلا معرّف مشروع") else id
             }
@@ -88,8 +105,7 @@ object MagicHourClient {
             val code = conn.responseCode
             val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.use { it.readText() } ?: ""
-            if (code == 402) error("انتهى الرصيد المجاني (402)")
-            if (code !in 200..299) error("$code: ${raw.take(200)}")
+            if (code !in 200..299) arabicHttpError(code, raw, "upload-urls")
             val (uploadUrl, filePath) = parseUploadUrlsResponse(raw)
             val put = (URL(uploadUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "PUT"
@@ -100,7 +116,7 @@ object MagicHourClient {
             }
             put.outputStream.use { out -> file.inputStream().use { input -> input.copyTo(out) } }
             val putCode = put.responseCode
-            if (putCode !in 200..299) error("رفع الصورة: $putCode")
+            if (putCode !in 200..299) arabicHttpError(putCode, "", "upload")
             filePath
         }
     }
@@ -135,7 +151,7 @@ object MagicHourClient {
                 val code = conn.responseCode
                 val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.use { it.readText() } ?: ""
-                if (code !in 200..299) error("$code: ${raw.take(200)}")
+                if (code !in 200..299) arabicHttpError(code, raw, "status")
                 parseProjectStatus(raw)
             }
         }
@@ -148,7 +164,7 @@ object MagicHourClient {
                 readTimeout = 180_000
             }
             val code = conn.responseCode
-            if (code !in 200..299) error("$code")
+            if (code !in 200..299) arabicHttpError(code, "", "download")
             conn.inputStream?.use { input -> target.outputStream().use { out -> input.copyTo(out) } }
             target
         }

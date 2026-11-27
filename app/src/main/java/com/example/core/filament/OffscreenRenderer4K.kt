@@ -58,7 +58,8 @@ data class CinematicPostProcessConfig(
     val warmthShift: Float = 0.14f,        // -0.5..0.5 (Golden Hour / 3000K Warmth Shift)
     val contrastBoost: Float = 1.14f,      // 0.8..1.5 (Filmic S-Curve Contrast)
     val cinematicLetterbox: Boolean = false, // 2.39:1 CinemaScope Aspect Ratio Framing Bars
-    val includeCountertopStaging: Boolean = true // Subtle Kettle, Indoor Plant & Glass Jars staging
+    val includeCountertopStaging: Boolean = true, // Subtle Kettle, Indoor Plant & Glass Jars staging
+    val filmGrain: Float = 0f // 0.0..0.3 (v1.12: film grain from Cinematic Pro, applied in the final pixel loop)
 )
 
 /**
@@ -378,6 +379,7 @@ object OffscreenRenderer4K {
         val vignetteStrength = postProcessConfig.vignetteStrength.coerceIn(0f, 1.0f)
         val warmth = postProcessConfig.warmthShift.coerceIn(-0.5f, 0.5f)
         val contrast = postProcessConfig.contrastBoost.coerceIn(0.8f, 1.5f)
+        val filmGrain = postProcessConfig.filmGrain.coerceIn(0f, 0.3f)
 
         for (y in 0 until height) {
             if (postProcessConfig.cinematicLetterbox && (y < letterboxBarHeight || y >= height - letterboxBarHeight)) {
@@ -460,6 +462,16 @@ object OffscreenRenderer4K {
                     cr *= vig
                     cg *= vig
                     cb *= vig
+                }
+
+                // Film grain (v1.12): deterministic per-pixel hash noise, so the
+                // Cinematic Pro grain slider actually reaches the export.
+                if (filmGrain > 0.001f) {
+                    val hash = (x * 374761393 + y * 668265263) * 974634211
+                    val noise = (((hash and 0x7FFFFFFF) % 1000) / 1000f - 0.5f) * filmGrain
+                    cr = (cr + noise).coerceIn(0f, 1f)
+                    cg = (cg + noise).coerceIn(0f, 1f)
+                    cb = (cb + noise).coerceIn(0f, 1f)
                 }
 
                 val hex = PbrMaterial.linearRgbToHex(Vector3(cr, cg, cb))
@@ -593,7 +605,7 @@ object OffscreenRenderer4K {
             // Environment background / sky radiance
             val dirY = ray.direction.y.coerceIn(0f, 1f)
             val skyColor = Vector3(0.5f, 0.7f, 1.0f) * dirY + Vector3(0.9f, 0.95f, 1.0f) * (1f - dirY)
-            return skyColor * (0.2f * exposure.exposureMultiplier)
+            return skyColor * (0.2f * exposure.displayScale)
         }
 
         val mat = hit.material
@@ -734,8 +746,12 @@ object OffscreenRenderer4K {
             finalRgb = finalRgb * (1f - fresnelWeight) + reflColor * fresnelWeight
         }
 
-        // Scale by camera photometric exposure factor
-        return finalRgb * (exposure.exposureMultiplier * 1.5f)
+        // v1.12 — scale by the display-referred factor, NOT the Filament
+        // photometric multiplier: the light terms above are display-referred
+        // (sun ≈ lux/10000), so the photometric value (≈0.0009) crushed
+        // every render to near-black. displayScale is 1.0 at the default
+        // camera settings and follows aperture/shutter/ISO/EV from there.
+        return finalRgb * exposure.displayScale
     }
 
     /**
@@ -1013,6 +1029,92 @@ object OffscreenRenderer4K {
                 colliders.add(BoxCollider(aabb = aabb, material = pbrMat))
             }
 
+            // v1.12 — door panel + handle: a cabinet used to render as one
+            // flat slab. A thin inset front panel (slightly darker than the
+            // body) plus a steel handle bar breaks the slab and reads as a
+            // real door. Only for axis-aligned cabinets (rotationY a multiple
+            // of 90°): for odd angles an axis-aligned panel could protrude,
+            // so those keep the single box. The front is the local +Z face
+            // rotated by rotationY — the same convention as frontPoint() in
+            // the live renderer.
+            if (el.type.category == ElementCategory.BASE_CABINET ||
+                el.type.category == ElementCategory.WALL_CABINET ||
+                el.type.category == ElementCategory.TALL_UNIT
+            ) {
+                val rotNorm = ((el.rotationY % 360f) + 360f) % 360f
+                val rotSteps = (rotNorm / 90f).roundToInt()
+                if (abs(rotNorm - rotSteps * 90f) <= 1f) {
+                    val front = when (rotSteps % 4) {
+                        0 -> Vector3(0f, 0f, 1f)
+                        1 -> Vector3(1f, 0f, 0f)
+                        2 -> Vector3(0f, 0f, -1f)
+                        else -> Vector3(-1f, 0f, 0f)
+                    }
+                    val hasToeKick = el.position.y <= 20f && el.type.category != ElementCategory.APPLIANCE
+                    val bodyBottomY = if (hasToeKick) (aabb.min.y + 95f).coerceAtMost(aabb.max.y) else aabb.min.y
+                    val isWall = el.type.category == ElementCategory.WALL_CABINET
+                    val panelBottomY = if (isWall) bodyBottomY + 12f else bodyBottomY + 8f
+                    val panelTopY = aabb.max.y - 12f
+                    if (panelTopY - panelBottomY > 120f) {
+                        val panelMat = pbrMat.copy(
+                            id = pbrMat.id + "_door",
+                            baseColor = pbrMat.baseColor * 0.88f
+                        )
+                        val inset = 25f
+                        val panelAabb = when {
+                            front.z > 0.5f -> AABB(
+                                min = Vector3(aabb.min.x + inset, panelBottomY, aabb.max.z + 2f),
+                                max = Vector3(aabb.max.x - inset, panelTopY, aabb.max.z + 14f)
+                            )
+                            front.z < -0.5f -> AABB(
+                                min = Vector3(aabb.min.x + inset, panelBottomY, aabb.min.z - 14f),
+                                max = Vector3(aabb.max.x - inset, panelTopY, aabb.min.z - 2f)
+                            )
+                            front.x > 0.5f -> AABB(
+                                min = Vector3(aabb.max.x + 2f, panelBottomY, aabb.min.z + inset),
+                                max = Vector3(aabb.max.x + 14f, panelTopY, aabb.max.z - inset)
+                            )
+                            else -> AABB(
+                                min = Vector3(aabb.min.x - 14f, panelBottomY, aabb.min.z + inset),
+                                max = Vector3(aabb.min.x - 2f, panelTopY, aabb.max.z - inset)
+                            )
+                        }
+                        // Guard against degenerate panels on very narrow units.
+                        if (panelAabb.max.x - panelAabb.min.x > 40f && panelAabb.max.z - panelAabb.min.z > 40f) {
+                            colliders.add(BoxCollider(aabb = panelAabb, material = panelMat))
+                            // Steel handle bar on the panel's front face.
+                            val panelWidth = if (front.z != 0f) panelAabb.max.x - panelAabb.min.x else panelAabb.max.z - panelAabb.min.z
+                            val handleLen = (panelWidth * 0.35f).coerceIn(90f, 220f)
+                            val handleY = if (isWall) panelBottomY + 70f else panelTopY - 70f
+                            val handleCenter = Vector3(
+                                (panelAabb.min.x + panelAabb.max.x) * 0.5f,
+                                handleY,
+                                (panelAabb.min.z + panelAabb.max.z) * 0.5f
+                            )
+                            val handleAabb = when {
+                                front.z > 0.5f -> AABB(
+                                    min = Vector3(handleCenter.x - handleLen / 2f, handleY - 7f, panelAabb.max.z + 1f),
+                                    max = Vector3(handleCenter.x + handleLen / 2f, handleY + 7f, panelAabb.max.z + 15f)
+                                )
+                                front.z < -0.5f -> AABB(
+                                    min = Vector3(handleCenter.x - handleLen / 2f, handleY - 7f, panelAabb.min.z - 15f),
+                                    max = Vector3(handleCenter.x + handleLen / 2f, handleY + 7f, panelAabb.min.z - 1f)
+                                )
+                                front.x > 0.5f -> AABB(
+                                    min = Vector3(panelAabb.max.x + 1f, handleY - 7f, handleCenter.z - handleLen / 2f),
+                                    max = Vector3(panelAabb.max.x + 15f, handleY + 7f, handleCenter.z + handleLen / 2f)
+                                )
+                                else -> AABB(
+                                    min = Vector3(panelAabb.min.x - 15f, handleY - 7f, handleCenter.z - handleLen / 2f),
+                                    max = Vector3(panelAabb.min.x - 1f, handleY + 7f, handleCenter.z + handleLen / 2f)
+                                )
+                            }
+                            colliders.add(BoxCollider(aabb = handleAabb, material = PbrMaterial.BRUSHED_STAINLESS_STEEL))
+                        }
+                    }
+                }
+            }
+
             // Countertop slab (if present) + Tasteful 3D Countertop Staging Props
             el.countertopMaterial?.let { topMat ->
                 val topMaxY = aabb.max.y + 38f
@@ -1061,30 +1163,73 @@ object OffscreenRenderer4K {
                                 material = ceramicPotMat
                             )
                         )
+                        // v1.12 — foliage as a small cluster of offset boxes instead of
+                        // one big green slab, so it reads as leaves, not a box.
+                        listOf(
+                            Triple(-45f, 0f, -30f) to 95f,
+                            Triple(40f, 55f, 25f) to 80f,
+                            Triple(-5f, 105f, -45f) to 70f
+                        ).forEach { (off, size) ->
+                            val half = size / 2f
+                            colliders.add(
+                                BoxCollider(
+                                    aabb = AABB(
+                                        Vector3(px + off.first - half, topMaxY + 110f + off.second, cz + off.third - half),
+                                        Vector3(px + off.first + half, topMaxY + 110f + off.second + size, cz + off.third + half)
+                                    ),
+                                    material = plantFoliageMat
+                                )
+                            )
+                        }
+                        val kx = cx + 180f
+                        // v1.12 — kettle with a spout and lid instead of a plain black box.
                         colliders.add(
                             BoxCollider(
-                                aabb = AABB(Vector3(px - 75f, topMaxY + 110f, cz - 75f), Vector3(px + 75f, topMaxY + 220f, cz + 75f)),
-                                material = plantFoliageMat
+                                aabb = AABB(Vector3(kx - 55f, topMaxY, cz - 55f), Vector3(kx + 55f, topMaxY + 150f, cz + 55f)),
+                                material = kettleMatteBlackMat
                             )
                         )
-                        val kx = cx + 180f
                         colliders.add(
                             BoxCollider(
-                                aabb = AABB(Vector3(kx - 60f, topMaxY, cz - 60f), Vector3(kx + 60f, topMaxY + 170f, cz + 60f)),
+                                aabb = AABB(Vector3(kx + 55f, topMaxY + 55f, cz - 12f), Vector3(kx + 115f, topMaxY + 80f, cz + 12f)),
                                 material = kettleMatteBlackMat
+                            )
+                        )
+                        colliders.add(
+                            BoxCollider(
+                                aabb = AABB(Vector3(kx - 45f, topMaxY + 150f, cz - 45f), Vector3(kx + 45f, topMaxY + 162f, cz + 45f)),
+                                material = PbrMaterial.BRUSHED_STAINLESS_STEEL
                             )
                         )
                     } else if (!isSink && el.type.category == ElementCategory.BASE_CABINET) {
                         when (variant) {
                             0 -> {
-                                // Minimalist Pour-Over Kettle
+                                // Minimalist Pour-Over Kettle (v1.12: body + spout + lid)
                                 colliders.add(
                                     BoxCollider(
                                         aabb = AABB(
-                                            Vector3(cx + 40f, topMaxY, cz - 55f),
-                                            Vector3(cx + 150f, topMaxY + 165f, cz + 55f)
+                                            Vector3(cx + 45f, topMaxY, cz - 50f),
+                                            Vector3(cx + 145f, topMaxY + 145f, cz + 50f)
                                         ),
                                         material = kettleMatteBlackMat
+                                    )
+                                )
+                                colliders.add(
+                                    BoxCollider(
+                                        aabb = AABB(
+                                            Vector3(cx + 145f, topMaxY + 50f, cz - 12f),
+                                            Vector3(cx + 200f, topMaxY + 75f, cz + 12f)
+                                        ),
+                                        material = kettleMatteBlackMat
+                                    )
+                                )
+                                colliders.add(
+                                    BoxCollider(
+                                        aabb = AABB(
+                                            Vector3(cx + 55f, topMaxY + 145f, cz - 40f),
+                                            Vector3(cx + 135f, topMaxY + 157f, cz + 40f)
+                                        ),
+                                        material = PbrMaterial.BRUSHED_STAINLESS_STEEL
                                     )
                                 )
                             }
@@ -1124,15 +1269,23 @@ object OffscreenRenderer4K {
                                         material = ceramicPotMat
                                     )
                                 )
-                                colliders.add(
-                                    BoxCollider(
-                                        aabb = AABB(
-                                            Vector3(cx - 125f, topMaxY + 105f, cz - 90f),
-                                            Vector3(cx + 5f, topMaxY + 205f, cz + 40f)
-                                        ),
-                                        material = plantFoliageMat
+                                // v1.12 — foliage cluster instead of one green slab.
+                                listOf(
+                                    Triple(-60f, 0f, -25f) to 85f,
+                                    Triple(35f, 50f, 20f) to 70f,
+                                    Triple(-10f, 95f, -40f) to 60f
+                                ).forEach { (off, size) ->
+                                    val half = size / 2f
+                                    colliders.add(
+                                        BoxCollider(
+                                            aabb = AABB(
+                                                Vector3(cx - 60f + off.first - half, topMaxY + 105f + off.second, cz - 25f + off.third - half),
+                                                Vector3(cx - 60f + off.first + half, topMaxY + 105f + off.second + size, cz - 25f + off.third + half)
+                                            ),
+                                            material = plantFoliageMat
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     }

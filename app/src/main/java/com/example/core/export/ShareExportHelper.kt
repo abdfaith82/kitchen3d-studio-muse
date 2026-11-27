@@ -22,6 +22,51 @@ object ShareExportHelper {
     const val MIME_APK = "application/vnd.android.package-archive"
 
     /**
+     * v1.12 (P1-9) — exports used to live only in cacheDir and only leave via
+     * the share sheet, so dismissing the sheet lost the file. This also writes
+     * a copy to Downloads/Kitchen3DStudio (MediaStore, no permission needed
+     * on API 29+; legacy public dir below that), so the file survives even if
+     * the share sheet is dismissed. Returns the display path, or null.
+     */
+    fun copyToDownloads(context: Context, file: File, mimeType: String): String? {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/Kitchen3DStudio")
+                }
+                val uri = context.contentResolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                ) ?: return null
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    file.inputStream().use { input -> input.copyTo(out) }
+                }
+                "التنزيلات/Kitchen3DStudio/${file.name}"
+            } else {
+                val dir = File(
+                    android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS
+                    ),
+                    "Kitchen3DStudio"
+                ).apply { mkdirs() }
+                val target = File(dir, file.name)
+                file.copyTo(target, overwrite = true)
+                "التنزيلات/Kitchen3DStudio/${file.name}"
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Saves a Downloads copy (P1-9) and tells the user where it went. */
+    private fun saveDownloadsCopy(context: Context, file: File, mimeType: String) {
+        copyToDownloads(context, file, mimeType)?.let { path ->
+            Toast.makeText(context, "تم حفظ نسخة في $path", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
      * Copies the currently running compiled APK (`context.applicationInfo.sourceDir`) into
      * `cacheDir/exports/Kitchen3DStudio_Release.apk` and opens the system Share sheet.
      */
@@ -51,6 +96,7 @@ object ShareExportHelper {
         dialogTitle: String = "مشاركة ملف المشروع"
     ) {
         try {
+            saveDownloadsCopy(context, file, mimeType)
             val uri = getUriForFile(context, file)
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = mimeType
@@ -63,9 +109,10 @@ object ShareExportHelper {
             }
             context.startActivity(chooser)
         } catch (e: Exception) {
+            android.util.Log.e("ShareExport", "share sheet failed", e)
             Toast.makeText(
                 context,
-                "تعذر فتح نافذة المشاركة: ${e.localizedMessage}",
+                "تعذّر فتح نافذة المشاركة — الملف محفوظ في التنزيلات/Kitchen3DStudio.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -86,6 +133,7 @@ object ShareExportHelper {
         roomDimensionsText: String
     ) {
         try {
+            saveDownloadsCopy(context, file, mimeType)
             val uri = getUriForFile(context, file)
             val summaryBody = buildString {
                 appendLine("📐 مخطط مطبخ تنفيذي وهندسي — $projectName")
@@ -109,9 +157,10 @@ object ShareExportHelper {
             }
             context.startActivity(chooser)
         } catch (e: Exception) {
+            android.util.Log.e("ShareExport", "social share failed", e)
             Toast.makeText(
                 context,
-                "تعذر مشاركة المخطط عبر التواصل الاجتماعي: ${e.localizedMessage}",
+                "تعذّرت المشاركة عبر التواصل الاجتماعي — الملف محفوظ في التنزيلات/Kitchen3DStudio.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -132,6 +181,7 @@ object ShareExportHelper {
         roomDimensionsText: String
     ) {
         try {
+            saveDownloadsCopy(context, file, mimeType)
             val uri = getUriForFile(context, file)
             val subject = "طلب تسعير وتنفيذ مخطط مطبخ هندسي: $projectName ($workshopName)"
             val emailBody = buildString {
@@ -163,9 +213,10 @@ object ShareExportHelper {
             }
             context.startActivity(chooser)
         } catch (e: Exception) {
+            android.util.Log.e("ShareExport", "email share failed", e)
             Toast.makeText(
                 context,
-                "تعذر فتح تطبيق البريد الإلكتروني: ${e.localizedMessage}",
+                "تعذّر فتح تطبيق البريد الإلكتروني — الملف محفوظ في التنزيلات/Kitchen3DStudio.",
                 Toast.LENGTH_LONG
             ).show()
         }

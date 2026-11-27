@@ -1,5 +1,16 @@
 package com.example.presentation.ui
 
+/** v1.12 (P1-10) — Magic Hour returns English statuses ("processing",
+ * "queued", "error"...); the user sees Arabic. Unknown values pass through. */
+private fun arabicVideoStatus(status: String): String = when (status) {
+    "complete" -> "مكتمل"
+    "processing" -> "قيد المعالجة"
+    "queued" -> "في الانتظار"
+    "error" -> "فشل"
+    "canceled" -> "أُلغي"
+    else -> status
+}
+
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -288,7 +299,7 @@ fun KitchenMediaDialog(
             videoPollAttempts = attempts
             val res = MagicHourClient.projectStatus(id, key)
             res.onSuccess { (status, url) ->
-                videoStatus = "حالة الفيديو: $status (تحقق $attempts)"
+                videoStatus = "حالة الفيديو: ${arabicVideoStatus(status)} (تحقق $attempts)"
                 when (status) {
                     "complete" -> {
                         if (url != null) {
@@ -310,7 +321,7 @@ fun KitchenMediaDialog(
                     "error", "canceled" -> {
                         videoBusy = false
                         videoProjectId = null
-                        videoStatus = "فشل توليد الفيديو ($status) — جرّب نموذجاً آخر أو أعد المحاولة."
+                        videoStatus = "فشل توليد الفيديو (${arabicVideoStatus(status)}) — جرّب نموذجاً آخر أو أعد المحاولة."
                         return@LaunchedEffect
                     }
                 }
@@ -846,10 +857,15 @@ fun KitchenMediaDialog(
                                             Button(
                                                 onClick = {
                                                     if (magicHourKeyInput.isNotBlank()) {
-                                                        MagicHourKeyStore.saveApiKey(context, magicHourKeyInput)
-                                                        magicHourKeyInput = ""
-                                                        hasMagicHourKey = true
-                                                        showMagicHourKeyField = false
+                                                        // v1.12 (P2-1): saveApiKey returns Boolean now — never
+                                                        // claim "saved ✓" when the KeyStore write failed.
+                                                        if (MagicHourKeyStore.saveApiKey(context, magicHourKeyInput)) {
+                                                            magicHourKeyInput = ""
+                                                            hasMagicHourKey = true
+                                                            showMagicHourKeyField = false
+                                                        } else {
+                                                            videoStatus = "تعذّر حفظ المفتاح على هذا الجهاز — حاول مجدداً."
+                                                        }
                                                     }
                                                 },
                                                 enabled = magicHourKeyInput.isNotBlank(),

@@ -59,6 +59,24 @@ class OffscreenRenderTest {
         val pixels = IntArray(1920 * 1080)
         result.bitmap.getPixels(pixels, 0, 1920, 0, 0, 1920, 1080)
         assertTrue("rendered frame looks uniform", pixels.toSet().size > 100)
+        // v1.12 (P0-3): the old photometric exposure multiplier crushed every
+        // render to near-black (mean luminance ~0.01). A sunlit empty room
+        // must land in a normal photographic range after ACES.
+        var luminanceSum = 0.0
+        var sampled = 0
+        var i = 0
+        while (i < pixels.size) {
+            val px = pixels[i]
+            val r = (px shr 16) and 0xFF
+            val g = (px shr 8) and 0xFF
+            val b = px and 0xFF
+            luminanceSum += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+            sampled++
+            i += 16
+        }
+        val meanLuminance = luminanceSum / sampled
+        assertTrue("rendered frame is near-black (mean luminance $meanLuminance)", meanLuminance > 0.15)
+        assertTrue("rendered frame is blown out (mean luminance $meanLuminance)", meanLuminance < 0.95)
     }
 
     @Test

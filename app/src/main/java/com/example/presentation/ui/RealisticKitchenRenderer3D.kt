@@ -247,11 +247,30 @@ object RealisticKitchenRenderer3D {
             }
 
             // Window Daylight Sun Floor Patches (projected solar light shafts on the floor from any window opening)
+            // v1.12 — the patch now follows the sun instead of fixed constants:
+            // its depth into the room is the window height over tan(elevation),
+            // and its sideways skew is the same sun vector's lateral component
+            // (same directionToLight convention as DirectionalSunLight).
+            val sunElRad = Math.toRadians(sunElevationDeg.toDouble()).toFloat()
+            val sunAzRad = Math.toRadians(sunAzimuthDeg.toDouble()).toFloat()
+            // Floor travel of the light: 1200 mm window height × horizontal
+            // travel per unit drop. travelX/travelZ are the floor displacement
+            // of a ray entering through a window.
+            val sunTravelScale = 1200f / sin(sunElRad).coerceAtLeast(0.15f)
+            val sunTravelX = -cos(sunElRad) * sin(sunAzRad) * sunTravelScale
+            val sunTravelZ = -cos(sunElRad) * cos(sunAzRad) * sunTravelScale
             if (archVizMode == ArchVizRenderMode.PHOTOREAL_DAYLIGHT || archVizMode == ArchVizRenderMode.ARCHITECTURAL_CLAY) {
                 room.walls.filter { it.isEnabled }.forEach { wall ->
                     wall.openings.filter { it.type == OpeningType.WINDOW }.forEach { win ->
-                        val patchDepth = 1250f
-                        val skewShift = 220f
+                        // Depth = travel along the wall's inward normal; skew = travel along the wall.
+                        val (patchDepthRaw, skewShift) = when (wall.side) {
+                            WallSide.NORTH -> Pair(sunTravelZ, sunTravelX)
+                            WallSide.SOUTH -> Pair(-sunTravelZ, sunTravelX)
+                            WallSide.WEST -> Pair(sunTravelX, sunTravelZ)
+                            WallSide.EAST -> Pair(-sunTravelX, sunTravelZ)
+                        }
+                        if (patchDepthRaw <= 20f) return@forEach // the sun does not shine through this wall
+                        val patchDepth = patchDepthRaw.coerceIn(20f, 2600f)
                         val (s0, s1, s2, s3) = when (wall.side) {
                             WallSide.NORTH -> listOf(
                                 Vector3(win.offsetMm + 40f, 1.8f, 120f),
@@ -320,13 +339,16 @@ object RealisticKitchenRenderer3D {
                 val corners = elem.getFloorCorners()
                 if (corners.size == 4) {
                     val cCenter = elem.position.copy(y = 2.0f)
-                    // 1. Directional Sun Cast Shadow (skewed along opposite of solar light vector)
+                    // 1. Directional Sun Cast Shadow (v1.12: follows the sun — the
+                    // shadow falls along the light's floor travel, length =
+                    // height / tan(elevation), instead of fixed constants).
                     if (archVizMode != ArchVizRenderMode.TECHNICAL_XRAY) {
-                        val shadowShiftX = (elem.dimensions.y * 0.09f).coerceIn(45f, 180f)
-                        val shadowShiftZ = (elem.dimensions.y * 0.08f).coerceIn(40f, 160f)
+                        val shadowLen = (elem.dimensions.y / tan(sunElRad).coerceAtLeast(0.15f)).coerceIn(0f, 600f)
+                        val shadowShiftX = shadowLen * -sin(sunAzRad)
+                        val shadowShiftZ = shadowLen * -cos(sunAzRad)
                         val castCorners = corners.map { c ->
                             Vector3(
-                                (c.x - shadowShiftX).coerceIn(0f, room.widthMm),
+                                (c.x + shadowShiftX).coerceIn(0f, room.widthMm),
                                 1.9f,
                                 (c.z + shadowShiftZ).coerceIn(0f, room.depthMm)
                             )

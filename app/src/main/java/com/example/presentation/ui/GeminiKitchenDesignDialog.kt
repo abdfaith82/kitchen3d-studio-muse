@@ -540,6 +540,8 @@ fun GeminiKitchenDesignDialog(
                                         onApplyGeneratedProject(aiState.generatedProject)
                                         onDismiss()
                                     },
+                                    // v1.12 (P0-1) — never offer to apply an empty design.
+                                    enabled = aiState.generatedProject.elements.isNotEmpty(),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
                                     modifier = Modifier
                                         .fillMaxWidth()

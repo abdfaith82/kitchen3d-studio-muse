@@ -216,7 +216,8 @@ data class CinematicRenderSettings(
         warmthShift = filmLook.warmthShift,
         contrastBoost = filmLook.contrast,
         cinematicLetterbox = letterbox || aspect.isLetterboxed,
-        includeCountertopStaging = true
+        includeCountertopStaging = true,
+        filmGrain = filmGrain.coerceIn(0f, 0.3f)
     )
 
     fun summaryAr(): String {

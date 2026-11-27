@@ -63,6 +63,8 @@ enum class ResizeHandle2D(val labelAr: String) {
 fun Viewport2D(
     state: KitchenEditorUiState,
     onSelectElement: (String) -> Unit,
+    // v1.12 (P1-14) — tapping empty space clears the selection.
+    onClearSelection: () -> Unit = {},
     onMoveSelected: (Float, Float, Float) -> Unit,
     onMoveElementToPosition: ((String, Vector3, Float) -> Unit)? = null,
     onCommitTransform: (String, Vector3, Float, Vector3) -> Unit,
@@ -170,12 +172,13 @@ fun Viewport2D(
             }
             .testTag("viewport_2d_canvas_container")
             .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
+                // v1.12 (P1-13) — pinch-zoom only. Single-finger panning lives
+                // in the drag detector below; this detector used to pan too, so
+                // an empty-space drag moved the plan twice as far per finger move.
+                detectTransformGestures { _, _, zoom, _ ->
                     if (!isDraggingFurniture && !isResizingFurniture) {
                         if (abs(zoom - 1f) > 0.006f) {
                             zoomScale = (zoomScale * zoom).coerceIn(0.5f, 6f)
-                        } else if (latestSelectedIds.isEmpty()) {
-                            panOffset += pan
                         }
                     }
                 }
@@ -199,7 +202,8 @@ fun Viewport2D(
                         if (isVirtualRulerActive) {
                             val pinAScreen = worldToScreen(rulerPinAMm.x, rulerPinAMm.y)
                             val pinBScreen = worldToScreen(rulerPinBMm.x, rulerPinBMm.y)
-                            val pinHitRadius = 42f
+                            // v1.12 (P1-14) — 24dp radius (≈48dp finger target), not raw pixels.
+                            val pinHitRadius = with(density) { 24.dp.toPx() }
                             when {
                                 (startOffset - pinAScreen).getDistance() <= pinHitRadius -> {
                                     activeDraggedRulerPin = 'A'
@@ -224,7 +228,8 @@ fun Viewport2D(
                             val southHandlePt = worldToScreen(midX, aabb.max.z)
                             val northHandlePt = worldToScreen(midX, aabb.min.z)
                             val cornerSePt = worldToScreen(aabb.max.x, aabb.max.z)
-                            val handleHitRadiusPx = 30f
+                            // v1.12 (P1-14) — 24dp radius (≈48dp finger target), not raw pixels.
+                            val handleHitRadiusPx = with(density) { 24.dp.toPx() }
 
                             val hitResizeHandle = when {
                                 (startOffset - cornerSePt).getDistance() <= handleHitRadiusPx -> ResizeHandle2D.CORNER_SE
@@ -411,8 +416,14 @@ fun Viewport2D(
                                 }
                             }
                         } else {
-                            // Pan the 2D canvas when dragging empty floor space
-                            panOffset += dragAmount
+                            // Pan the 2D canvas when dragging empty floor space.
+                            // v1.12 (P1-20) — clamped to one canvas size so the
+                            // plan can never be panned completely off-screen.
+                            val newPan = panOffset + dragAmount
+                            panOffset = Offset(
+                                newPan.x.coerceIn(-size.width.toFloat(), size.width.toFloat()),
+                                newPan.y.coerceIn(-size.height.toFloat(), size.height.toFloat())
+                            )
                         }
                     }
                 )
@@ -436,12 +447,20 @@ fun Viewport2D(
                             onPlaceFurnitureAt(worldXMm, worldZMm)
                         }
                     } else {
+                        // v1.12 (P1-14) — the tap used to require the exact
+                        // AABB, so narrow cabinets were nearly untappable;
+                        // it now reuses the drag detector's touch tolerance,
+                        // and tapping empty space clears the selection.
+                        val touchToleranceMm = (18f / baseScale.coerceAtLeast(0.001f)).coerceIn(20f, 120f)
                         val tappedElem = latestElements.lastOrNull { elem ->
                             val aabb = elem.getAABB()
-                            worldXMm in aabb.min.x..aabb.max.x && worldZMm in aabb.min.z..aabb.max.z
+                            worldXMm in (aabb.min.x - touchToleranceMm)..(aabb.max.x + touchToleranceMm) &&
+                                worldZMm in (aabb.min.z - touchToleranceMm)..(aabb.max.z + touchToleranceMm)
                         }
                         if (tappedElem != null) {
                             onSelectElement(tappedElem.id)
+                        } else {
+                            onClearSelection()
                         }
                     }
                 }

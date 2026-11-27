@@ -35,6 +35,7 @@ import com.example.core.ai.AiProvider
 import com.example.core.ai.GeminiKitchenDesignService
 import com.example.core.ai.KitchenAiStylePreference
 import com.example.core.export.JsonProjectExporter
+import com.example.core.filament.CinematicRenderSettings
 import com.example.core.filament.CinematicTimeOfDay
 import com.example.core.filament.RealismSettings
 import com.example.core.filament.ReferenceRealismEngine
@@ -159,6 +160,10 @@ data class KitchenEditorUiState(
     val kitchenRegion: KitchenRegion = KitchenRegion.MENA_GULF,
     val realismSettings: RealismSettings = RealismSettings(),
     val appliedReferencePresetId: String? = null,
+    // v1.12 — the last Cinematic Pro setup applied by the user, so Render
+    // Studio can open with the same lens / exposure / grain / post values
+    // instead of silently ignoring them (P1-4).
+    val appliedCinematicSettings: CinematicRenderSettings? = null,
     val enabledAccessoryIds: Set<String> = InternalAccessoryType.DEFAULT_ENABLED_IDS,
     val aiDesignState: AiDesignUiState = AiDesignUiState.Idle,
     // v1.7/v1.8 — AI generation uses direct REST calls with free user keys
@@ -206,6 +211,34 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 ) : AndroidViewModel(application) {
 
     private val commandHistory = CommandHistory(maxCapacity = 150)
+
+    // v1.12 (P0-2) — sketch state lives here so rotating the phone no longer
+    // wipes the hand-drawn sketch (the dialog's remember{} state died on
+    // every config change). The dialog mirrors its local state here on each
+    // change and restores from here on first composition; dismissing the
+    // dialog clears it, so a fresh open starts empty.
+    private val _sketchStrokes = MutableStateFlow<List<com.example.core.sketch.DrawnStroke>>(emptyList())
+    val sketchStrokes: StateFlow<List<com.example.core.sketch.DrawnStroke>> = _sketchStrokes.asStateFlow()
+    private val _sketchCalibrationMarker = MutableStateFlow<com.example.core.sketch.CalibrationMarker?>(null)
+    val sketchCalibrationMarker: StateFlow<com.example.core.sketch.CalibrationMarker?> = _sketchCalibrationMarker.asStateFlow()
+    private val _sketchBackgroundBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
+    val sketchBackgroundBitmap: StateFlow<android.graphics.Bitmap?> = _sketchBackgroundBitmap.asStateFlow()
+
+    fun updateSketchState(
+        strokes: List<com.example.core.sketch.DrawnStroke>,
+        marker: com.example.core.sketch.CalibrationMarker?,
+        bitmap: android.graphics.Bitmap?
+    ) {
+        _sketchStrokes.value = strokes
+        _sketchCalibrationMarker.value = marker
+        _sketchBackgroundBitmap.value = bitmap
+    }
+
+    fun clearSketchState() {
+        _sketchStrokes.value = emptyList()
+        _sketchCalibrationMarker.value = null
+        _sketchBackgroundBitmap.value = null
+    }
 
     private val geminiKitchenDesignService = GeminiKitchenDesignService()
 
@@ -1030,23 +1063,37 @@ class KitchenEditorViewModel @JvmOverloads constructor(
 
     /**
      * Recolours every element in the project to the given cabinet /
-     * countertop finishes. Direct state update, like the existing
-     * changeElementMaterialAndCountertop — room changes stay undoable,
-     * element finishes do not get their own undo entry.
+     * countertop finishes. v1.12 (P1-6): this used to be a direct state
+     * update with no undo entry, so Undo after a style/preset tap reverted
+     * the walls but never the cabinets. It is now one undoable batch
+     * command, exactly like changeSelectedMaterial.
      */
     fun applyFinishesToAllElements(
         cabinetFinish: MaterialFinish,
         countertopFinish: MaterialFinish
     ) {
-        _uiState.update { current ->
-            val updated = current.project.elements.map { elem ->
-                elem.copy(
-                    material = cabinetFinish,
-                    countertopMaterial = if (elem.countertopMaterial != null) countertopFinish else null
-                )
-            }
-            current.copy(project = current.project.copy(elements = updated))
+        val selectedIds = _uiState.value.selectedElementIds
+        val before = _uiState.value.project.elements
+        val after = before.map { elem ->
+            elem.copy(
+                material = cabinetFinish,
+                countertopMaterial = if (elem.countertopMaterial != null) countertopFinish else null
+            )
         }
+        if (before == after) return
+        val cmd = BatchFloorPlanLayoutCommand(
+            beforeElements = before,
+            afterElements = after,
+            beforeSelection = selectedIds,
+            afterSelection = selectedIds,
+            title = "تغيير خامات الخزائن وأسطح العمل",
+            description = "تحديث خامة ${after.size} عنصر إلى ${cabinetFinish.name}",
+            category = CommandCategory.MATERIAL_FINISH,
+            onApplyElements = { elems, sel ->
+                _uiState.update { it.copy(project = it.project.copy(elements = elems), selectedElementIds = sel) }
+            }
+        )
+        commandHistory.execute(cmd)
     }
 
     /**
@@ -1069,6 +1116,16 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 safetyConstraintBanner = "تم تطبيق: ${preset.titleAr} — ${preset.dimensionsText(it.unitSystem)}"
             )
         }
+    }
+
+    /**
+     * v1.12 — stores the Cinematic Pro setup so Render Studio opens with the
+     * same lens, exposure, grain and post-process values. The dialog also
+     * keeps calling applyCinematicTimeOfDay / setCameraPose for the live
+     * scene; this only adds the stored setup for the 4K export.
+     */
+    fun applyCinematicSettings(settings: CinematicRenderSettings) {
+        _uiState.update { it.copy(appliedCinematicSettings = settings) }
     }
 
     /** Stores photorealism settings and drives the live light from them (LED glow → artificial light). */
@@ -1758,7 +1815,32 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         commandHistory.execute(cmd)
     }
 
+    /**
+     * The eye the viewport is actually rendering right now (v1.12, P1-19):
+     * in walk mode it is the walk position; in orbit modes it is the eye the
+     * orbit formula derives from yaw/pitch/zoom/pan — NOT the stale
+     * walkCameraPosition the tweens used to lerp from.
+     */
+    private fun currentRenderedEye(): Vector3 {
+        val s = _uiState.value
+        return if (s.cameraMode == CameraMode.FIRST_PERSON_WALK) {
+            s.walkCameraPosition
+        } else {
+            CameraTweenEngine.orbitEyeFor(
+                s.project.room,
+                s.cameraYaw,
+                s.cameraPitch,
+                s.cameraZoom,
+                Vector3(s.cameraPanX, s.cameraPanY, 0f)
+            )
+        }
+    }
+
     fun setCameraMode(mode: CameraMode) {
+        // v1.12 (P1-21) — entering walk mode used to leave the turntable
+        // spinning the hidden orbit yaw, so exiting walk showed the room
+        // rotated far from where the user left it.
+        stopCameraAutoRotate()
         if (mode == CameraMode.FIRST_PERSON_WALK) {
             val safeSpawn = WalkthroughCollisionEngine.getSafeWalkSpawnPosition(
                 room = _uiState.value.project.room,
@@ -1813,10 +1895,18 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             cameraAnimationJob?.cancel()
             _uiState.update { it.copy(isCameraTweening = false) }
         }
+        // v1.12 (P1-21) — a two-finger pan used to leave the turntable
+        // spinning under the user's fingers.
+        stopCameraAutoRotate()
         _uiState.update {
+            // v1.12 (P1-20) — the pan was unclamped: a few swipes slid the
+            // kitchen completely off-screen, and the lost view was even saved.
+            // Bound it to half the room's largest dimension.
+            val room = it.project.room
+            val maxPan = maxOf(room.widthMm, room.depthMm) * 0.5f
             it.copy(
-                cameraPanX = it.cameraPanX + deltaX,
-                cameraPanY = it.cameraPanY + deltaY
+                cameraPanX = (it.cameraPanX + deltaX).coerceIn(-maxPan, maxPan),
+                cameraPanY = (it.cameraPanY + deltaY).coerceIn(-maxPan, maxPan)
             )
         }
     }
@@ -1864,7 +1954,8 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         if (targetYaw == startYaw && targetPitch == startPitch && targetZoom == s.cameraZoom) return
         val startPose = CameraPose(
             mode = s.cameraMode,
-            eyePosition = s.walkCameraPosition,
+            // v1.12 (P1-19) — start from the eye the viewport actually renders.
+            eyePosition = currentRenderedEye(),
             yawDegrees = startYaw,
             pitchDegrees = startPitch,
             zoomFactor = s.cameraZoom,
@@ -1876,7 +1967,9 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             zoomFactor = targetZoom
         )
         cameraAnimationJob = viewModelScope.launch {
-            _uiState.update { it.copy(isCameraTweening = true) }
+            // v1.12 (P1-19) — seed the tween eye before the first frame so the
+            // viewport (which uses it while tweening) never flashes a stale eye.
+            _uiState.update { it.copy(isCameraTweening = true, walkCameraPosition = startPose.eyePosition) }
             try {
                 val steps = 20
                 val stepDelay = durationMs / steps
@@ -1892,6 +1985,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                             cameraYaw = interpolated.yawDegrees,
                             cameraPitch = interpolated.pitchDegrees,
                             cameraZoom = interpolated.zoomFactor,
+                            walkCameraPosition = interpolated.eyePosition,
                             walkLookYaw = interpolated.yawDegrees,
                             walkLookPitch = interpolated.pitchDegrees
                         )
@@ -2055,6 +2149,8 @@ class KitchenEditorViewModel @JvmOverloads constructor(
      */
     fun updateWalkLook(deltaYaw: Float, deltaPitch: Float) {
         if (_uiState.value.cameraMode != CameraMode.FIRST_PERSON_WALK) return
+        // v1.12 (P1-21) — looking around while walking stops the turntable.
+        stopCameraAutoRotate()
         _uiState.update {
             val newYaw = (it.walkLookYaw + deltaYaw) % 360f
             val newPitch = (it.walkLookPitch - deltaPitch).coerceIn(-75f, 75f)
@@ -2074,12 +2170,17 @@ class KitchenEditorViewModel @JvmOverloads constructor(
      */
     fun animateCameraToPreset(preset: CameraNavigationPreset, durationMs: Long = 750L) {
         cameraAnimationJob?.cancel()
+        // v1.12 (P1-21) — a preset glide is followed by the turntable resuming
+        // on its own if it is not stopped here (the single choke point for
+        // all preset taps).
+        stopCameraAutoRotate()
 
         val room = _uiState.value.project.room
         val selected = _uiState.value.singleSelectedElement
         val currentPose = CameraPose(
             mode = _uiState.value.cameraMode,
-            eyePosition = _uiState.value.walkCameraPosition,
+            // v1.12 (P1-19) — start from the eye the viewport actually renders.
+            eyePosition = currentRenderedEye(),
             yawDegrees = if (_uiState.value.cameraMode == CameraMode.FIRST_PERSON_WALK) _uiState.value.walkLookYaw else _uiState.value.cameraYaw,
             pitchDegrees = if (_uiState.value.cameraMode == CameraMode.FIRST_PERSON_WALK) _uiState.value.walkLookPitch else _uiState.value.cameraPitch,
             zoomFactor = _uiState.value.cameraZoom,
@@ -2092,6 +2193,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             _uiState.update {
                 it.copy(
                     isCameraTweening = true,
+                    walkCameraPosition = currentPose.eyePosition,
                     activeCameraPreset = preset
                 )
             }
@@ -2684,8 +2786,12 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             val nonOverlappingElements = CollisionDetector.resolveAllSceneOverlaps(importedProject.elements, importedProject.room)
             val safeProject = importedProject.copy(elements = nonOverlappingElements)
+            // v1.12 (P0-1) — an import used to clear the whole undo history,
+            // so Undo could never bring back the kitchen it replaced. The
+            // replaced project is now two undoable commands (room + elements).
+            val oldProject = _uiState.value.project
+            val oldSelection = _uiState.value.selectedElementIds
             repository.updateProject(safeProject)
-            commandHistory.clear()
             val report = ErgonomicValidationEngine.validateProject(safeProject)
             _uiState.update {
                 it.copy(
@@ -2694,6 +2800,33 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                     validationReport = report
                 )
             }
+            if (oldProject.room != safeProject.room) {
+                commandHistory.execute(
+                    ModifyRoomLayoutCommand(
+                        oldRoom = oldProject.room,
+                        newRoom = safeProject.room,
+                        title = "استيراد مشروع (الغرفة)",
+                        description = "${safeProject.room.widthMm.toInt()}×${safeProject.room.depthMm.toInt()} مم (${safeProject.room.layoutShape.titleAr})",
+                        onApplyRoom = { room ->
+                            _uiState.update { it.copy(project = it.project.copy(room = room)) }
+                        }
+                    )
+                )
+            }
+            commandHistory.execute(
+                BatchFloorPlanLayoutCommand(
+                    beforeElements = oldProject.elements,
+                    afterElements = safeProject.elements,
+                    beforeSelection = oldSelection,
+                    afterSelection = emptySet(),
+                    title = "استيراد مشروع (${safeProject.elements.size} وحدة)",
+                    description = "استبدال ${oldProject.elements.size} وحدة بـ ${safeProject.elements.size} وحدة مستوردة",
+                    category = CommandCategory.FLOORPLAN_TRANSFORM,
+                    onApplyElements = { elems, sel ->
+                        _uiState.update { it.copy(project = it.project.copy(elements = elems), selectedElementIds = sel) }
+                    }
+                )
+            )
         }
     }
 
@@ -2919,7 +3052,9 @@ class KitchenEditorViewModel @JvmOverloads constructor(
     fun saveCurrentProjectAs(name: String) {
         viewModelScope.launch {
             val saved = repository.saveProjectAs(name, _uiState.value.project)
-            commandHistory.clear()
+            // v1.12 (P1-7) — saving a copy must NOT wipe the undo history:
+            // the copy keeps the same element IDs, so the existing commands
+            // still apply. Clearing is only correct for load/new/restore.
             _uiState.update { it.copy(project = saved) }
         }
     }
@@ -2966,7 +3101,14 @@ class KitchenEditorViewModel @JvmOverloads constructor(
         ).jsonContent
     }
 
-    fun exportAndShareProjectJson(context: android.content.Context, projectId: String? = null) {
+    fun exportAndShareProjectJson(
+        context: android.content.Context,
+        projectId: String? = null,
+        // v1.12 (P1-8) — the old catch only printed the stack trace, so a
+        // failed export looked like a successful one ("جاري تصدير…" and then
+        // nothing). Callers now get the failure in Arabic to show the user.
+        onFailure: ((String) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             try {
                 val targetProject = if (projectId == null || projectId == _uiState.value.project.id) {
@@ -3003,6 +3145,7 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                onFailure?.invoke("تعذّر تصدير ملف JSON — تحقق من مساحة التخزين وحاول مجدداً.")
             }
         }
     }

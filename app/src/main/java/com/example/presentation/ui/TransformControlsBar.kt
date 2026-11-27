@@ -100,25 +100,25 @@ fun TransformControlsBar(
                 ) {
                     IconButton(
                         onClick = { onMove(-activeStepMm, 0f, 0f) },
-                        modifier = Modifier.size(26.dp).testTag("quick_nudge_x_neg")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("quick_nudge_x_neg")
                     ) {
                         Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "يسار X-", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = { onMove(activeStepMm, 0f, 0f) },
-                        modifier = Modifier.size(26.dp).testTag("quick_nudge_x_pos")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("quick_nudge_x_pos")
                     ) {
                         Icon(Icons.Default.KeyboardArrowRight, contentDescription = "يمين X+", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = { onMove(0f, 0f, -activeStepMm) },
-                        modifier = Modifier.size(26.dp).testTag("quick_nudge_z_neg")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("quick_nudge_z_neg")
                     ) {
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "عمق للداخل Z-", tint = Color(0xFF34D399), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = { onMove(0f, 0f, activeStepMm) },
-                        modifier = Modifier.size(26.dp).testTag("quick_nudge_z_pos")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("quick_nudge_z_pos")
                     ) {
                         Icon(Icons.Default.KeyboardArrowDown, contentDescription = "عمق للخارج Z+", tint = Color(0xFF34D399), modifier = Modifier.size(16.dp))
                     }
@@ -192,7 +192,7 @@ fun TransformControlsBar(
                     IconButton(
                         onClick = { onScale(1f / 1.10f) },
                         enabled = com.example.core.interaction.ElementScalePolicy.canScaleDown(selected.dimensions),
-                        modifier = Modifier.size(26.dp).testTag("scale_down_button")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("scale_down_button")
                     ) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "تصغير العنصر 10%", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
@@ -205,13 +205,13 @@ fun TransformControlsBar(
                     IconButton(
                         onClick = { onScale(1.10f) },
                         enabled = com.example.core.interaction.ElementScalePolicy.canScaleUp(selected.dimensions),
-                        modifier = Modifier.size(26.dp).testTag("scale_up_button")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("scale_up_button")
                     ) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "تكبير العنصر 10%", tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     }
                     IconButton(
                         onClick = onResetScale,
-                        modifier = Modifier.size(26.dp).testTag("scale_reset_button")
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("scale_reset_button")
                     ) {
                         Icon(Icons.Default.AspectRatio, contentDescription = "إعادة الحجم الأصلي", tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
                     }
@@ -337,37 +337,37 @@ fun TransformControlsBar(
                             )
                             IconButton(
                                 onClick = { onMove(-100f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_left_100")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_left_100")
                             ) {
                                 Text("-100", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(-10f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_left_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_left_10")
                             ) {
                                 Text("-10", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(-1f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_left_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_left_1")
                             ) {
                                 Text("-1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(1f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_right_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_right_1")
                             ) {
                                 Text("+1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(10f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_right_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_right_10")
                             ) {
                                 Text("+10", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(100f, 0f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_right_100")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_right_100")
                             ) {
                                 Text("+100", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
@@ -388,37 +388,37 @@ fun TransformControlsBar(
                             )
                             IconButton(
                                 onClick = { onMove(0f, 0f, -100f) },
-                                modifier = Modifier.size(30.dp).testTag("move_back_z_100")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_back_z_100")
                             ) {
                                 Text("-100", color = Color(0xFF34D399), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 0f, -10f) },
-                                modifier = Modifier.size(30.dp).testTag("move_back_z_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_back_z_10")
                             ) {
                                 Text("-10", color = Color(0xFF34D399), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 0f, -1f) },
-                                modifier = Modifier.size(30.dp).testTag("move_back_z_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_back_z_1")
                             ) {
                                 Text("-1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 0f, 1f) },
-                                modifier = Modifier.size(30.dp).testTag("move_front_z_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_front_z_1")
                             ) {
                                 Text("+1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 0f, 10f) },
-                                modifier = Modifier.size(30.dp).testTag("move_front_z_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_front_z_10")
                             ) {
                                 Text("+10", color = Color(0xFF34D399), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 0f, 100f) },
-                                modifier = Modifier.size(30.dp).testTag("move_front_z_100")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_front_z_100")
                             ) {
                                 Text("+100", color = Color(0xFF34D399), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
@@ -445,37 +445,37 @@ fun TransformControlsBar(
                             )
                             IconButton(
                                 onClick = { onMove(0f, -50f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_down_y_50")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_down_y_50")
                             ) {
                                 Text("-50", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, -10f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_down_y_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_down_y_10")
                             ) {
                                 Text("-10", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, -1f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_down_y_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_down_y_1")
                             ) {
                                 Text("-1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 1f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_up_y_1")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_up_y_1")
                             ) {
                                 Text("+1", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 10f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_up_y_10")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_up_y_10")
                             ) {
                                 Text("+10", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                             IconButton(
                                 onClick = { onMove(0f, 50f, 0f) },
-                                modifier = Modifier.size(30.dp).testTag("move_up_y_50")
+                                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("move_up_y_50")
                             ) {
                                 Text("+50", color = Color(0xFFFBBF24), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
