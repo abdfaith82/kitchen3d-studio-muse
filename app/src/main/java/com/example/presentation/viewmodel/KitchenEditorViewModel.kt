@@ -101,6 +101,8 @@ sealed class ActiveDialog {
     data object AluminumBarNesting : ActiveDialog()
     data object ProjectsManager : ActiveDialog()
     data object CabinetFillerTool : ActiveDialog()
+    data object SmartLayout : ActiveDialog()
+    data object SmartTiling : ActiveDialog()
     data object GeminiAiDesigner : ActiveDialog()
     data object KitchenMedia : ActiveDialog()
     data object SmartAccessories : ActiveDialog()
@@ -2412,6 +2414,36 @@ class KitchenEditorViewModel @JvmOverloads constructor(
                 )
             )
         }
+    }
+
+    fun applySmartLayout(elements: List<KitchenElement>, shapeTitle: String) {
+        // v1.16 — same undoable-replacement pattern as loadTemplate (v1.14):
+        // the old elements become one undo command; the room never changes.
+        val oldProject = _uiState.value.project
+        val oldSelection = _uiState.value.selectedElementIds
+        val safeElements = CollisionDetector.resolveAllSceneOverlaps(elements, oldProject.room)
+        repository.updateProject(oldProject.copy(elements = safeElements))
+        _uiState.update {
+            it.copy(
+                project = it.project.copy(elements = safeElements),
+                selectedElementIds = emptySet(),
+                activeDialog = null
+            )
+        }
+        commandHistory.execute(
+            BatchFloorPlanLayoutCommand(
+                beforeElements = oldProject.elements,
+                afterElements = safeElements,
+                beforeSelection = oldSelection,
+                afterSelection = emptySet(),
+                title = "تخطيط ذكي ($shapeTitle — ${safeElements.size} وحدة)",
+                description = "استبدال ${oldProject.elements.size} وحدة بتخطيط ذكي «$shapeTitle»",
+                category = CommandCategory.FLOORPLAN_TRANSFORM,
+                onApplyElements = { elems, sel ->
+                    _uiState.update { it.copy(project = it.project.copy(elements = elems), selectedElementIds = sel) }
+                }
+            )
+        )
     }
 
     fun applyCustomRoom(newRoom: RoomStructure) {

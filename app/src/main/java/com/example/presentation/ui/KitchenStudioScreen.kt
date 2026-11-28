@@ -65,6 +65,10 @@ fun KitchenStudioScreen(
     var showTemplatesDialog by remember { mutableStateOf(false) }
     // v1.14 — the template waiting for confirmation (id + title).
     var pendingTemplate by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // v1.16 — the smart layout waiting for confirmation (config + elements).
+    var pendingSmartLayout by remember {
+        mutableStateOf<Pair<com.example.core.geometry.SmartLayoutEngine.SmartLayoutConfig, List<KitchenElement>>?>(null)
+    }
     var exportStudioInitialTab by remember { mutableStateOf(ExportTab.PDF_BLUEPRINT) }
 
     // External Menu Drag-and-Drop State (from Sidebar or Top Visual Bar directly into 3D/2D Workspace)
@@ -449,6 +453,22 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("open_parametric_cabinet_button")
                     ) {
                         Icon(Icons.Default.Tune, contentDescription = "تخصيص الخزانة الإجرائي", tint = Color(0xFFF59E0B))
+                    }
+
+                    // v1.16 — Smart Layout Generator Button
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.SmartLayout) },
+                        modifier = Modifier.testTag("open_smart_layout_button")
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = "التخطيط الذكي", tint = Color(0xFF8B5CF6))
+                    }
+
+                    // v1.16 — Smart Tiling Calculator Button
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.SmartTiling) },
+                        modifier = Modifier.testTag("open_smart_tiling_button")
+                    ) {
+                        Icon(Icons.Default.GridOn, contentDescription = "التبليط الذكي", tint = Color(0xFF0EA5E9))
                     }
 
                     // 2D Nesting CAM Cut List Optimizer Button
@@ -1529,6 +1549,30 @@ fun KitchenStudioScreen(
                 onDismiss = { viewModel.openDialog(null) }
             )
         }
+        // v1.16 — Smart Layout Generator: the dialog previews the generated
+        // kitchen; the actual replace waits for the confirmation below.
+        is ActiveDialog.SmartLayout -> {
+            SmartLayoutDialog(
+                room = state.project.room,
+                onApply = { config, elements ->
+                    viewModel.openDialog(null)
+                    pendingSmartLayout = config to elements
+                },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        // v1.16 — Smart Tiling Calculator.
+        is ActiveDialog.SmartTiling -> {
+            SmartTilingDialog(
+                room = state.project.room,
+                elements = state.project.elements,
+                onApplyFloorMaterial = { material ->
+                    viewModel.changeFloorMaterial(material)
+                    viewModel.openDialog(null)
+                },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
         is ActiveDialog.GeminiAiDesigner -> {
             GeminiKitchenDesignDialog(
                 currentRoom = state.project.room,
@@ -1673,6 +1717,35 @@ fun KitchenStudioScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingTemplate = null }) {
+                    Text("إلغاء")
+                }
+            },
+            containerColor = Color(0xFF0F172A),
+            textContentColor = Color.White,
+            titleContentColor = Color.White
+        )
+    }
+
+    // v1.16 — smart layout confirmation (mirrors the template one above):
+    // applying replaces the whole kitchen (elements only — the room stays).
+    if (pendingSmartLayout != null) {
+        val (config, elements) = pendingSmartLayout!!
+        AlertDialog(
+            onDismissRequest = { pendingSmartLayout = null },
+            title = { Text("تطبيق التخطيط الذكي؟", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("سيستبدل التخطيط الذكي «${config.shape.titleAr}» مطبخك الحالي بالكامل (${elements.size} وحدة جديدة). يمكنك التراجع عنه فوراً من زر التراجع ↩️.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingSmartLayout = null
+                    viewModel.applySmartLayout(elements, config.shape.titleAr)
+                }) {
+                    Text("تطبيق التخطيط")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSmartLayout = null }) {
                     Text("إلغاء")
                 }
             },
