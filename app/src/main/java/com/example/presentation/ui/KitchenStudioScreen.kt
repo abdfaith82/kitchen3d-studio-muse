@@ -36,6 +36,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.camera.CameraMode
 import com.example.core.camera.CameraNavigationPreset
+import com.example.core.geometry.GrowthTourEngine
 import com.example.domain.model.ElementCategory
 import com.example.domain.model.KitchenElement
 import com.example.domain.model.KitchenElementType
@@ -470,6 +471,14 @@ fun KitchenStudioScreen(
                         modifier = Modifier.testTag("open_smart_tiling_button")
                     ) {
                         Icon(Icons.Default.GridOn, contentDescription = "التبليط الذكي", tint = Color(0xFF0EA5E9))
+                    }
+
+                    // v1.17 — Growth Animation Tour Button
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.GrowthTour) },
+                        modifier = Modifier.testTag("open_growth_tour_button")
+                    ) {
+                        Icon(Icons.Default.PlayCircle, contentDescription = "جولة النمو", tint = Color(0xFF8B5CF6))
                     }
 
                     // 2D Nesting CAM Cut List Optimizer Button
@@ -1571,6 +1580,17 @@ fun KitchenStudioScreen(
                     viewModel.changeFloorMaterial(material)
                     viewModel.openDialog(null)
                 },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        // v1.17 — Growth Animation Tour: the dialog drives the transient
+        // stage in the ViewModel; closing restores the full kitchen.
+        is ActiveDialog.GrowthTour -> {
+            GrowthTourDialog(
+                orderedElements = GrowthTourEngine.buildOrder(
+                    state.project.elements.filter { it.isVisible }
+                ),
+                onStageChange = { viewModel.setGrowthStage(it) },
                 onDismiss = { viewModel.openDialog(null) }
             )
         }

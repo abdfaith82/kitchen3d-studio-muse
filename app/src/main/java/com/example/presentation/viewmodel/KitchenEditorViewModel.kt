@@ -103,6 +103,7 @@ sealed class ActiveDialog {
     data object CabinetFillerTool : ActiveDialog()
     data object SmartLayout : ActiveDialog()
     data object SmartTiling : ActiveDialog()
+    data object GrowthTour : ActiveDialog()
     data object GeminiAiDesigner : ActiveDialog()
     data object KitchenMedia : ActiveDialog()
     data object SmartAccessories : ActiveDialog()
@@ -177,6 +178,9 @@ data class KitchenEditorUiState(
     val hasGeminiApiKey: Boolean = false,
     val hasGroqApiKey: Boolean = false,
     val isVrGyroModeEnabled: Boolean = false,
+    // v1.17 — growth tour: when non-null, the 3D viewport shows only the
+    // first N elements in build order (transient presentation, never saved).
+    val growthShownCount: Int? = null,
     val isVrStereoscopicSplit: Boolean = false,
     val isVrAutoWalkEnabled: Boolean = false,
     val isVrCameraSensorEnabled: Boolean = false,
@@ -3620,6 +3624,11 @@ class KitchenEditorViewModel @JvmOverloads constructor(
             if (exists) state
             else state.copy(savedMelamineSheetSizes = state.savedMelamineSheetSizes + sheetSize)
         }
+    }
+
+    // v1.17 — growth tour stage: null restores the full kitchen.
+    fun setGrowthStage(count: Int?) {
+        _uiState.update { it.copy(growthShownCount = count) }
     }
 
     fun updateLightingSimulation(

@@ -163,6 +163,19 @@ fun RenderStudioDialog(
     var lastRenderResult by remember { mutableStateOf<RenderResult?>(null) }
     var showRenderedOutputView by remember { mutableStateOf(false) }
     var gallerySaveStatus by remember { mutableStateOf<String?>(null) }
+    // v1.17 — panorama state + daylight hour + false-colour lux map.
+    var panoramaBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isRenderingPanorama by remember { mutableStateOf(false) }
+    var daylightHour by remember { mutableFloatStateOf(12f) }
+    var showFalseColor by remember { mutableStateOf(false) }
+    var falseColorBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(showFalseColor, lastRenderResult) {
+        if (showFalseColor && lastRenderResult != null) {
+            falseColorBitmap = withContext(Dispatchers.Default) {
+                FalseColorLuxMap.applyToBitmap(lastRenderResult!!.bitmap)
+            }
+        }
+    }
 
     fun applyMoodPreset(preset: CinematicMoodPreset) {
         activeMoodPreset = preset
@@ -267,6 +280,79 @@ fun RenderStudioDialog(
             showRenderedOutputView = true
             } finally {
                 isRendering = false
+            }
+        }
+    }
+
+    // v1.17 — 360° panorama: same sun/LED/exposure as the cinematic render,
+    // but the camera sits at eye level in the room centre and the renderer
+    // traces an equirectangular image instead of a perspective one.
+    fun triggerPanoramaRender() {
+        if (isRendering || isRenderingPanorama) return
+        isRenderingPanorama = true
+        renderProgress = null
+        gallerySaveStatus = null
+        renderJob = scope.launch {
+            try {
+                val room = state.project.room
+                val elements = state.project.elements.filter { it.isVisible }
+                val roomCenter = Vector3(room.widthMm * 0.5f, room.heightMm * 0.34f, room.depthMm * 0.5f)
+
+                val ledStrips = UnderCabinetLedGenerator.generateLedStrips(
+                    elements = elements,
+                    colorTempKelvin = ledKelvin,
+                    lumensPerMeter = ledLumens,
+                    isEnabled = isLedEnabled
+                )
+
+                val exposure = CameraExposure(
+                    apertureFNumber = aperture,
+                    shutterSpeedSeconds = 1.0f / shutterSpeedFrac,
+                    iso = iso,
+                    evCompensation = cinematicExposureEv,
+                    useAcesToneMapping = useAces
+                )
+
+                val sun = DirectionalSunLight(
+                    azimuthDegrees = sunAzimuth,
+                    elevationDegrees = sunElevation,
+                    colorTemperatureKelvin = sunKelvin,
+                    illuminanceLux = sunLux
+                )
+
+                val postConfig = CinematicPostProcessConfig(
+                    bloomIntensity = bloomIntensity,
+                    vignetteStrength = vignetteStrength,
+                    warmthShift = warmthShift,
+                    contrastBoost = contrastBoost,
+                    cinematicLetterbox = false,
+                    includeCountertopStaging = includeCountertopStaging,
+                    filmGrain = filmGrain,
+                    depthOfField = null
+                )
+
+                val res = OffscreenRenderer4K.renderScene(
+                    context = context,
+                    room = room,
+                    elements = elements,
+                    cameraEye = PanoramaEngine.panoramaEye(room.widthMm, room.depthMm),
+                    cameraTarget = roomCenter,
+                    fovDegrees = previewFovDeg,
+                    sunLight = sun,
+                    envPreset = selectedEnvPreset,
+                    ledStrips = ledStrips,
+                    exposure = exposure,
+                    resolutionPreset = selectedResolution,
+                    postProcessConfig = postConfig,
+                    enableAntiAliasing = enableAntiAliasing,
+                    equirectangular = true,
+                    onProgress = { prog ->
+                        renderProgress = prog
+                    }
+                )
+                panoramaBitmap = res.bitmap
+            } finally {
+                isRenderingPanorama = false
             }
         }
     }
@@ -441,6 +527,9 @@ fun RenderStudioDialog(
                             showRenderedOutputView = showRenderedOutputView,
                             onToggleOutputView = { showRenderedOutputView = it },
                             gallerySaveStatus = gallerySaveStatus,
+                            showFalseColor = showFalseColor,
+                            onToggleFalseColor = { showFalseColor = !showFalseColor },
+                            falseColorBitmap = falseColorBitmap,
                             onSaveToGallery = { bitmap ->
                                 scope.launch {
                                     // v1.12 (P1-2) — name the file with the size that was
@@ -464,6 +553,8 @@ fun RenderStudioDialog(
                             onSunLuxChange = { sunLux = it },
                             sunKelvin = sunKelvin,
                             onSunKelvinChange = { sunKelvin = it },
+                            daylightHour = daylightHour,
+                            onDaylightHourChange = { daylightHour = it },
                             selectedEnv = selectedEnvPreset,
                             onSelectEnv = { selectedEnvPreset = it },
                             isLedEnabled = isLedEnabled,
@@ -646,6 +737,28 @@ fun RenderStudioDialog(
                                         fontSize = 13.sp
                                     )
                                 }
+                                // v1.17 — 360° panorama render (eye level, room centre).
+                                Button(
+                                    onClick = ::triggerPanoramaRender,
+                                    enabled = !isRendering && !isRenderingPanorama,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("start_panorama_render_button"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF0EA5E9),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isRenderingPanorama) "جاري إخراج البانوراما 360° (${renderProgress?.percent ?: 0}%)..." else "بانوراما 360° (من منتصف المطبخ)",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp
+                                    )
+                                }
                                 // v1.12 (P1-2) — say plainly when 8K falls back to 4K.
                                 if (is8kFallback) {
                                     Text(
@@ -660,6 +773,14 @@ fun RenderStudioDialog(
                 }
             }
         }
+    }
+
+    // v1.17 — the panorama viewer opens over the studio once its render lands.
+    if (panoramaBitmap != null) {
+        PanoramaViewerDialog(
+            bitmap = panoramaBitmap!!,
+            onDismiss = { panoramaBitmap = null }
+        )
     }
 }
 
@@ -698,8 +819,14 @@ private fun Cinematic4KStudioMainScreen(
     showRenderedOutputView: Boolean,
     onToggleOutputView: (Boolean) -> Unit,
     gallerySaveStatus: String?,
-    onSaveToGallery: (Bitmap) -> Unit
+    onSaveToGallery: (Bitmap) -> Unit,
+    // v1.17 — false-colour lux map over the rendered output.
+    showFalseColor: Boolean = false,
+    onToggleFalseColor: () -> Unit = {},
+    falseColorBitmap: Bitmap? = null
 ) {
+    // v1.17 — when the lux map is on and computed, it replaces the render.
+    val displayBitmap = if (showFalseColor && falseColorBitmap != null) falseColorBitmap else lastResult?.bitmap
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -787,7 +914,29 @@ private fun Cinematic4KStudioMainScreen(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
+                            // v1.17 — false-colour lux map toggle.
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (showFalseColor) Color(0xFFDC2626) else Color(0xFF1E293B),
+                                modifier = Modifier.clickable { onToggleFalseColor() }
+                            ) {
+                                Text(
+                                    text = if (showFalseColor) "خريطة الإضاءة ✓" else "خريطة الإضاءة",
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
+                    }
+
+                    if (showFalseColor && lastResult != null) {
+                        Text(
+                            text = "خريطة إضاءة (ألوان زائفة): أزرق = خافت • أخضر = متوسط • أحمر = ساطع",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
                     }
 
                     var isBeforeAfterSplitMode by remember { mutableStateOf(false) }
@@ -826,7 +975,7 @@ private fun Cinematic4KStudioMainScreen(
                                         .clip(RoundedCornerShape(0.dp))
                                 ) {
                                     Image(
-                                        bitmap = lastResult.bitmap.asImageBitmap(),
+                                        bitmap = (displayBitmap ?: lastResult.bitmap).asImageBitmap(),
                                         contentDescription = "الصورة السينمائية 4K المخرجة",
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
@@ -871,7 +1020,7 @@ private fun Cinematic4KStudioMainScreen(
                                 )
                             } else {
                                 Image(
-                                    bitmap = lastResult.bitmap.asImageBitmap(),
+                                    bitmap = (displayBitmap ?: lastResult.bitmap).asImageBitmap(),
                                     contentDescription = "الصورة السينمائية 4K المخرجة",
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier
@@ -1433,8 +1582,22 @@ private fun LightingTabContent(
     ledKelvin: Float,
     onLedKelvinChange: (Float) -> Unit,
     ledLumens: Float,
-    onLedLumensChange: (Float) -> Unit
+    onLedLumensChange: (Float) -> Unit,
+    // v1.17 — time-of-day slider (drives the sun setters above).
+    daylightHour: Float,
+    onDaylightHourChange: (Float) -> Unit
 ) {
+    // v1.17 — one tap/slide applies the whole sun setup for an hour of the day.
+    fun applyDaylight(h: Float) {
+        onDaylightHourChange(h)
+        val s = DaylightSimulation.sunForHour(h)
+        onSunAzimuthChange(s.azimuthDegrees)
+        onSunElevationChange(s.elevationDegrees)
+        onSunKelvinChange(s.colorTemperatureKelvin)
+        onSunLuxChange(s.illuminanceLux)
+        onLedEnabledChange(s.ledOn)
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -1460,6 +1623,59 @@ private fun LightingTabContent(
                             )
                         }
                     }
+                }
+            }
+        }
+
+        // v1.17 — time-of-day: one slider (and four scenario chips) drives the
+        // whole sun setup — azimuth, elevation, colour temperature, lux, LED.
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF111827))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "وقت اليوم — الشمس حسب الساعة",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Icon(Icons.Default.WbSunny, contentDescription = null, tint = Color(0xFFF59E0B))
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val daylight = DaylightSimulation.sunForHour(daylightHour)
+                    Text(
+                        "الساعة ${DaylightSimulation.hourLabel(daylightHour)} — ${daylight.labelAr} • ارتفاع ${daylight.elevationDegrees.roundToInt()}° • ${daylight.colorTemperatureKelvin.roundToInt()}K",
+                        color = Color(0xFFCBD5E1),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Slider(
+                        value = daylightHour,
+                        onValueChange = { applyDaylight(it) },
+                        valueRange = 0f..24f,
+                        modifier = Modifier.testTag("daylight_hour_slider")
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(DaylightSimulation.SCENARIOS) { (label, hour) ->
+                            FilterChip(
+                                selected = kotlin.math.abs(daylightHour - hour) < 0.5f,
+                                onClick = { applyDaylight(hour) },
+                                label = { Text(label, fontSize = 12.sp) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "منزلق الساعة يضبط السمت والارتفاع وحرارة اللون وشدة الشمس معاً؛ الليل يشغّل شرائط LED تلقائياً.",
+                        color = Color(0xFF94A3B8),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }

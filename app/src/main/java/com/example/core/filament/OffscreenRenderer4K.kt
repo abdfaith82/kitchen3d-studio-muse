@@ -248,14 +248,21 @@ object OffscreenRenderer4K {
         resolutionPreset: RenderResolutionPreset = RenderResolutionPreset.FHD_1080P,
         postProcessConfig: CinematicPostProcessConfig = CinematicPostProcessConfig(),
         enableAntiAliasing: Boolean = true,
+        // v1.17 — equirectangular 360° panorama: the ray for each pixel comes
+        // from spherical coordinates instead of the perspective camera basis,
+        // and the output is a fixed 2048x1024 (2:1) image. DoF is disabled —
+        // a depth-of-field blur makes no sense on a panorama.
+        equirectangular: Boolean = false,
         onProgress: (RenderProgress) -> Unit = {}
     ): RenderResult = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
         val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024L * 1024L)
         // Memory-safe internal buffer resolution so 8K V-Ray preset never triggers OOM on constrained mobile heaps
         val useSafe4KBufferFor8K = resolutionPreset == RenderResolutionPreset.UHD_8K_VRAY && maxHeapMb < 1024L
-        val width = if (useSafe4KBufferFor8K) 3840 else resolutionPreset.width
-        val height = if (useSafe4KBufferFor8K) 2160 else resolutionPreset.height
+        val width = if (equirectangular) PanoramaEngine.PANORAMA_WIDTH
+            else if (useSafe4KBufferFor8K) 3840 else resolutionPreset.width
+        val height = if (equirectangular) PanoramaEngine.PANORAMA_HEIGHT
+            else if (useSafe4KBufferFor8K) 2160 else resolutionPreset.height
 
         val envSH = SphericalHarmonics.createPreset(envPreset)
 
@@ -293,7 +300,7 @@ object OffscreenRenderer4K {
         // Only allocated when DoF is actually enabled; plain renders pay nothing.
         val dofConfig = postProcessConfig.depthOfField
         val dofRadiusPx = dofConfig?.exportBlurRadiusPx(width) ?: 0f
-        val dofEnabled = dofRadiusPx >= 0.75f
+        val dofEnabled = dofRadiusPx >= 0.75f && !equirectangular
         val depthMm: FloatArray? = if (dofEnabled) FloatArray(width * height) { Float.MAX_VALUE } else null
         val completedTiles = AtomicInteger(0)
         val lastReportedPercent = AtomicInteger(-1)
@@ -301,7 +308,13 @@ object OffscreenRenderer4K {
         fun traceAt(fx: Float, fy: Float, depthOut: FloatArray? = null): Vector3 {
             val normY = 1.0f - 2.0f * fy / height.toFloat()
             val normX = 2.0f * fx / width.toFloat() - 1.0f
-            val rayDir = (forward + right * (normX * halfWidth) + up * (normY * halfHeight)).normalized()
+            // v1.17 — panorama: spherical ray from the pixel's (u, v) position;
+            // otherwise the usual perspective ray from the camera basis.
+            val rayDir = if (equirectangular) {
+                PanoramaEngine.equirectDirection(fx / width.toFloat(), fy / height.toFloat())
+            } else {
+                (forward + right * (normX * halfWidth) + up * (normY * halfHeight)).normalized()
+            }
             return traceRay(
                 ray = Ray(cameraEye, rayDir),
                 colliders = colliders,

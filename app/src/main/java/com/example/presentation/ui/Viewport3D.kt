@@ -33,6 +33,7 @@ import com.example.core.camera.CameraNavigationPreset
 import com.example.core.camera.VrCameraNavSubMode
 import com.example.core.camera.VrCameraSensorNavigationOverlay
 import com.example.core.camera.rememberVrGyroscopeEffect
+import com.example.core.geometry.GrowthTourEngine
 import com.example.core.geometry.WallGeometryCutter
 import com.example.core.interaction.CameraMotionPolicy
 import com.example.core.math.Vector3
@@ -119,7 +120,12 @@ fun Viewport3D(
     modifier: Modifier = Modifier
 ) {
     val room = state.project.room
-    val elements = state.project.elements.filter { it.isVisible && it.layer !in state.hiddenLayers }
+    val elements = run {
+        val visible = state.project.elements.filter { it.isVisible && it.layer !in state.hiddenLayers }
+        // v1.17 — growth tour: reveal only the first N elements in build order.
+        val growthCount = state.growthShownCount
+        if (growthCount != null) GrowthTourEngine.buildOrder(visible).take(growthCount) else visible
+    }
     val selectedIds = state.selectedElementIds
     val singleSelected = state.singleSelectedElement
 
