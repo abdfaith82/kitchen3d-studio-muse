@@ -481,6 +481,22 @@ fun KitchenStudioScreen(
                         Icon(Icons.Default.PlayCircle, contentDescription = "جولة النمو", tint = Color(0xFF8B5CF6))
                     }
 
+                    // v1.18 — Water & Electric Button
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.WaterElectric) },
+                        modifier = Modifier.testTag("open_water_electric_button")
+                    ) {
+                        Icon(Icons.Default.WaterDrop, contentDescription = "الماء والكهرباء", tint = Color(0xFF38BDF8))
+                    }
+
+                    // v1.18 — Cut List Button
+                    IconButton(
+                        onClick = { viewModel.openDialog(ActiveDialog.CutList) },
+                        modifier = Modifier.testTag("open_cut_list_button")
+                    ) {
+                        Icon(Icons.Default.ListAlt, contentDescription = "قائمة القطع", tint = Color(0xFFF59E0B))
+                    }
+
                     // 2D Nesting CAM Cut List Optimizer Button
                     IconButton(
                         onClick = { viewModel.openDialog(ActiveDialog.NestingOptimizer) },
@@ -1591,6 +1607,33 @@ fun KitchenStudioScreen(
                     state.project.elements.filter { it.isVisible }
                 ),
                 onStageChange = { viewModel.setGrowthStage(it) },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        // v1.18 — Water & Electric: auto sockets apply through the existing
+        // undoable addWallUtilityPoint path; pipes are computed on the fly.
+        is ActiveDialog.WaterElectric -> {
+            WaterElectricDialog(
+                room = state.project.room,
+                elements = state.project.elements,
+                onApplyPoints = { points ->
+                    points.forEach { pt ->
+                        viewModel.addWallUtilityPoint(pt.wallId, pt.type, pt.offsetMm, pt.elevationMm, label = pt.labelAr)
+                    }
+                },
+                onRemovePoint = { wallId, utilityId ->
+                    viewModel.removeWallUtilityPoint(wallId, utilityId)
+                },
+                onDismiss = { viewModel.openDialog(null) }
+            )
+        }
+        // v1.18 — Simplified cut list, from the scene's parametric cabinets.
+        is ActiveDialog.CutList -> {
+            val cabinets = remember(state.project.elements) {
+                viewModel.getParametricCabinetsFromScene()
+            }
+            CutListDialog(
+                cabinets = cabinets,
                 onDismiss = { viewModel.openDialog(null) }
             )
         }

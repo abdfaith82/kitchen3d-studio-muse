@@ -104,6 +104,8 @@ sealed class ActiveDialog {
     data object SmartLayout : ActiveDialog()
     data object SmartTiling : ActiveDialog()
     data object GrowthTour : ActiveDialog()
+    data object WaterElectric : ActiveDialog()
+    data object CutList : ActiveDialog()
     data object GeminiAiDesigner : ActiveDialog()
     data object KitchenMedia : ActiveDialog()
     data object SmartAccessories : ActiveDialog()
