@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.core.camera.CameraMode
 import com.example.core.camera.CameraNavigationPreset
 import com.example.domain.model.ElementCategory
+import com.example.domain.model.KitchenElement
 import com.example.domain.model.KitchenElementType
 import com.example.presentation.viewmodel.*
 import kotlin.math.roundToInt
